@@ -14,73 +14,6 @@ O ponto principal de execucao e o arquivo [app.py](/C:/Users/Salis/OneDrive/Docu
 - Comandos via chat para controlar TTS e alternar lives do YouTube
 - Cache local de autenticacao e configuracoes em `data/`
 
-## Estrutura
-
-```text
-app.py                    # ponto de entrada
-launcher_gui.py           # interface desktop
-config.py                 # configuracoes globais e paths
-app_state.py              # persistencia de estado simples
-platforms/twitch/         # autenticacao, IRC e bot Twitch
-platforms/youtube/        # autenticacao, resolver de live e bot YouTube
-services/tts/             # TTS, sanitizacao de texto e player de audio
-```
-
-## Requisitos
-
-- Python 3.13+
-- Git
-- Conta e credenciais Twitch
-- Conta e credenciais Google/YouTube
-- Credenciais AWS com acesso ao Amazon Polly
-
-## Instalacao
-
-```powershell
-git clone https://github.com/Salistick/NOME-DO-REPO.git
-cd NOME-DO-REPO
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-Se o projeto ainda nao tiver `requirements.txt`, instale as dependencias que o codigo usa:
-
-```powershell
-pip install python-dotenv requests boto3 pygame pytchat yt-dlp
-```
-
-## Gerar EXE
-
-O projeto pode ser empacotado como executavel Windows com PyInstaller.
-
-Arquivos de build incluidos no repositorio:
-
-- `requirements.txt`
-- `bot_live.spec`
-- `build_exe.bat`
-- `installer.iss`
-
-Para gerar o executavel:
-
-```powershell
-.\build_exe.bat
-```
-
-Ao final, o executavel sera criado em:
-
-```text
-dist\BotLive.exe
-```
-
-Para distribuir:
-
-- entregue o arquivo `BotLive.exe`
-- a pessoa deve colocar o `.env` na mesma pasta onde estiver o `BotLive.exe`
-- depois e so executar o `BotLive.exe`
-
-Quando empacotado, o projeto ja foi preparado para procurar o `.env` ao lado do executavel.
-
 ### Instalador Windows
 
 O workflow do GitHub tambem gera um instalador `BotLiveInstaller.exe`.
@@ -171,12 +104,6 @@ POLLY_OUTPUT_FORMAT=mp3
 POLLY_SAMPLE_RATE=24000
 ```
 
-## Execucao
-
-```powershell
-python app.py
-```
-
 Ao iniciar:
 
 - a GUI abre com os botoes de Twitch e YouTube
@@ -207,27 +134,9 @@ Ao iniciar:
 - `!live1`, `!live2`, ... - troca o monitoramento do YouTube
 - `!clive1`, `!clive2`, ... - remove uma conta/live salva
 
-## Seguranca
-
-Arquivos sensiveis nao devem ser versionados.
-
-Itens ignorados no projeto:
-
-- `.env`
-- `data/`
-- `__pycache__/`
-
 ## Observacoes
 
 - O projeto foi organizado para uso local/desktop.
 - Tokens e configuracoes ficam persistidos em `data/`.
 - O YouTube depende de live ativa para iniciar o monitoramento de chat.
 - O TTS usa sanitizacao de texto para reduzir spam e melhorar a fala em PT-BR.
-
-## Publicacao de alteracoes
-
-```powershell
-git add .
-git commit -m "Sua mensagem"
-git push
-```

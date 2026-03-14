@@ -7,6 +7,7 @@ O ponto principal de execucao e o arquivo [app.py](/C:/Users/Salis/OneDrive/Docu
 ## Recursos
 
 - Conexao com Twitch via OAuth e IRC
+- Monitoramento com uma conta Twitch e envio de mensagens com outra conta bot
 - Conexao com YouTube via OAuth e monitoramento de live chat
 - Leitura de mensagens com Amazon Polly
 - GUI simples em Tkinter para ligar e desligar Twitch e YouTube
@@ -60,7 +61,15 @@ TWITCH_CLIENT_ID=
 TWITCH_CLIENT_SECRET=
 TWITCH_REDIRECT_URI=
 TWITCH_CHANNEL=
+TWITCH_BOT_CLIENT_ID=
+TWITCH_BOT_CLIENT_SECRET=
+TWITCH_BOT_REDIRECT_URI=
+TWITCH_BOT_LOGIN=
+TWITCH_BOT_ACCESS_TOKEN=
+TWITCH_BOT_REFRESH_TOKEN=
 ```
+
+Na Twitch, a conta conectada pela GUI continua sendo a conta monitorada no chat. As mensagens enviadas pelo bot saem pela conta configurada nas variaveis `TWITCH_BOT_*`.
 
 ### YouTube
 
@@ -92,6 +101,8 @@ Ao iniciar:
 
 - a GUI abre com os botoes de Twitch e YouTube
 - a Twitch pode reconectar usando cache salvo
+- o chat monitorado na Twitch e o da conta conectada na GUI
+- as respostas e comandos enviados na Twitch saem pela conta bot configurada no `.env`
 - o YouTube pode reconectar usando a conta principal salva
 - o TTS e iniciado uma vez e compartilhado entre as plataformas
 

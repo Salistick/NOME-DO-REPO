@@ -31,6 +31,7 @@ exe = EXE(
     [],
     exclude_binaries=False,
     name="BotLive",
+    icon="icon.ico",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

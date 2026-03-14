@@ -16,6 +16,7 @@ DefaultDirName={localappdata}\BotLive
 DefaultGroupName={#MyAppName}
 OutputDir=dist
 OutputBaseFilename={#MyAppInstallerName}
+SetupIconFile=icon.ico
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern

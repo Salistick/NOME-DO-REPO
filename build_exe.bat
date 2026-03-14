@@ -30,7 +30,7 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo Build concluido.
-echo Coloque o arquivo .env dentro de dist\BotLive\
-echo Execute dist\BotLive\BotLive.exe
+echo Coloque o arquivo .env dentro de dist\
+echo Execute dist\BotLive.exe
 
 endlocal

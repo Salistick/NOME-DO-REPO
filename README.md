@@ -59,6 +59,7 @@ Arquivos de build incluidos no repositorio:
 - `requirements.txt`
 - `bot_live.spec`
 - `build_exe.bat`
+- `installer.iss`
 
 Para gerar o executavel:
 
@@ -69,16 +70,28 @@ Para gerar o executavel:
 Ao final, o executavel sera criado em:
 
 ```text
-dist\BotLive\BotLive.exe
+dist\BotLive.exe
 ```
 
 Para distribuir:
 
-- entregue a pasta `dist\BotLive`
-- coloque o arquivo `.env` dentro dessa mesma pasta
-- execute `BotLive.exe`
+- entregue o arquivo `BotLive.exe`
+- a pessoa deve colocar o `.env` na mesma pasta onde estiver o `BotLive.exe`
+- depois e so executar o `BotLive.exe`
 
 Quando empacotado, o projeto ja foi preparado para procurar o `.env` ao lado do executavel.
+
+### Instalador Windows
+
+O workflow do GitHub tambem gera um instalador `BotLiveInstaller.exe`.
+
+Esse instalador:
+
+- instala o programa em uma pasta local do usuario
+- cria atalho no menu iniciar
+- pode criar atalho na area de trabalho
+
+Depois da instalacao, o usuario deve colocar o `.env` na mesma pasta do `BotLive.exe` instalado.
 
 ### Download pelo GitHub
 
@@ -91,12 +104,12 @@ Voce pode baixar o executavel de duas formas:
 - rodando manualmente o workflow em `Actions > Build Windows EXE`
 - criando uma tag `v*`, por exemplo `v1.0.0`, para disparar a build
 
-O workflow publica dois artefatos:
+O workflow publica um artefato:
 
-- `BotLive-windows-folder`
-- `BotLive-windows-zip`
+- `BotLive-windows-exe`
+- `BotLive-installer`
 
-Depois de baixar, coloque o `.env` dentro da pasta do executavel antes de rodar.
+Depois de baixar, coloque o `.env` na mesma pasta do executavel antes de rodar.
 
 ### Publicar em Releases
 
@@ -110,9 +123,10 @@ git push origin v1.0.0
 Quando essa tag for enviada:
 
 - o GitHub Actions roda a build automaticamente
-- o arquivo `BotLive-windows.zip` e gerado
+- o arquivo `BotLive.exe` e gerado
+- o instalador `BotLiveInstaller.exe` e gerado
 - uma Release e criada automaticamente no GitHub
-- o `.zip` fica anexado na Release para download
+- o `BotLive.exe` e o `BotLiveInstaller.exe` ficam anexados na Release para download
 
 Para testar sem publicar uma Release, voce pode abrir `Actions > Build Windows EXE` e clicar em `Run workflow`. Nesse modo, o GitHub gera apenas os artefatos da build.
 

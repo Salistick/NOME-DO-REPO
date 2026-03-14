@@ -12,6 +12,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      BOTLIVE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'manual' }}
 
     steps:
       - name: Checkout
@@ -28,25 +30,30 @@ jobs:
       - name: Build EXE
         run: python -m PyInstaller --clean bot_live.spec
 
-      - name: Package distributable folder
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+
+      - name: Build installer
         shell: powershell
-        run: Compress-Archive -Path dist\BotLive\* -DestinationPath dist\BotLive-windows.zip -Force
+        run: iscc /DBotLiveVersion=$env:BOTLIVE_VERSION installer.iss
 
-      - name: Upload artifact folder
+      - name: Upload artifact exe
         uses: actions/upload-artifact@v4
         with:
-          name: BotLive-windows-folder
-          path: dist/BotLive
+          name: BotLive-windows-exe
+          path: dist/BotLive.exe
 
-      - name: Upload artifact zip
+      - name: Upload artifact installer
         uses: actions/upload-artifact@v4
         with:
-          name: BotLive-windows-zip
-          path: dist/BotLive-windows.zip
+          name: BotLive-installer
+          path: dist/BotLiveInstaller.exe
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/BotLive-windows.zip
+          files: |
+            dist/BotLive.exe
+            dist/BotLiveInstaller.exe
           generate_release_notes: true

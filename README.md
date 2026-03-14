@@ -98,6 +98,24 @@ O workflow publica dois artefatos:
 
 Depois de baixar, coloque o `.env` dentro da pasta do executavel antes de rodar.
 
+### Publicar em Releases
+
+Para publicar uma versao distribuivel no GitHub Releases:
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Quando essa tag for enviada:
+
+- o GitHub Actions roda a build automaticamente
+- o arquivo `BotLive-windows.zip` e gerado
+- uma Release e criada automaticamente no GitHub
+- o `.zip` fica anexado na Release para download
+
+Para testar sem publicar uma Release, voce pode abrir `Actions > Build Windows EXE` e clicar em `Run workflow`. Nesse modo, o GitHub gera apenas os artefatos da build.
+
 ## Configuracao
 
 Crie um arquivo `.env` na raiz do projeto com as chaves necessarias.

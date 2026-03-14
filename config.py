@@ -53,6 +53,13 @@ TWITCH_REDIRECT_URI = os.getenv("TWITCH_REDIRECT_URI", "").strip()
 
 TWITCH_CHANNEL = os.getenv("TWITCH_CHANNEL", "").strip().lower()
 
+TWITCH_BOT_CLIENT_ID = os.getenv("TWITCH_BOT_CLIENT_ID", "").strip() or TWITCH_CLIENT_ID
+TWITCH_BOT_CLIENT_SECRET = os.getenv("TWITCH_BOT_CLIENT_SECRET", "").strip() or TWITCH_CLIENT_SECRET
+TWITCH_BOT_REDIRECT_URI = os.getenv("TWITCH_BOT_REDIRECT_URI", "").strip() or TWITCH_REDIRECT_URI
+TWITCH_BOT_LOGIN = os.getenv("TWITCH_BOT_LOGIN", "").strip().lower()
+TWITCH_BOT_ACCESS_TOKEN = os.getenv("TWITCH_BOT_ACCESS_TOKEN", "").strip()
+TWITCH_BOT_REFRESH_TOKEN = os.getenv("TWITCH_BOT_REFRESH_TOKEN", "").strip()
+
 TWITCH_AUTH_URL = "https://id.twitch.tv/oauth2/authorize"
 TWITCH_TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 TWITCH_VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
@@ -106,3 +113,12 @@ def validate_local_config(require_twitch: bool = False):
 
     if not TWITCH_REDIRECT_URI:
         raise RuntimeError("Defina TWITCH_REDIRECT_URI no arquivo .env")
+
+
+def has_twitch_bot_sender_config() -> bool:
+    return bool(
+        TWITCH_BOT_LOGIN
+        and TWITCH_BOT_ACCESS_TOKEN
+        and TWITCH_BOT_CLIENT_ID
+        and TWITCH_BOT_CLIENT_SECRET
+    )

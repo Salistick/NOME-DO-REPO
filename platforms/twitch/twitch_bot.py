@@ -2,10 +2,11 @@ import threading
 import time
 from typing import Callable, Optional
 
-from config import TWITCH_CHANNEL, TOKEN_CACHE_FILE
+from config import TWITCH_CHANNEL, TOKEN_CACHE_FILE, has_twitch_bot_sender_config
 from .twitch_auth import TwitchAuth
 from .twitch_cache import TokenCache
 from .twitch_irc import TwitchIRCClient
+from .twitch_sender import TwitchChatSender
 
 
 class TwitchBot:
@@ -16,6 +17,7 @@ class TwitchBot:
         self.auth = TwitchAuth(self.cache)
 
         self.client: Optional[TwitchIRCClient] = None
+        self.sender = TwitchChatSender()
 
         self._thread: Optional[threading.Thread] = None
         self._running = False
@@ -85,6 +87,11 @@ class TwitchBot:
             pass
 
         try:
+            self.sender.disconnect()
+        except Exception:
+            pass
+
+        try:
             if self._thread and self._thread.is_alive():
                 self._thread.join(timeout=5.0)
         except Exception:
@@ -114,18 +121,26 @@ class TwitchBot:
         if not text:
             return
 
-        if self.client:
-            try:
-                clean = " ".join(text.split()).strip()
-                if not clean:
-                    return
+        try:
+            clean = " ".join(text.split()).strip()
+            if not clean:
+                return
 
-                clean = clean[:450]
+            clean = clean[:450]
+            channel = self._get_monitored_channel()
 
-                self.client.send_chat_message(clean)
+            if not channel:
+                print("[TWITCH BOT] Canal monitorado indisponivel. Mensagem nao enviada.")
+                return
 
-            except Exception as exc:
-                print(f"[TWITCH BOT] Falha ao enviar mensagem: {exc}")
+            if not has_twitch_bot_sender_config():
+                print("[TWITCH BOT] Conta bot da Twitch nao configurada no .env.")
+                return
+
+            self.sender.send_message(channel, clean)
+
+        except Exception as exc:
+            print(f"[TWITCH BOT] Falha ao enviar mensagem: {exc}")
 
     # ==================================
     # Connection lifecycle
@@ -199,6 +214,11 @@ class TwitchBot:
             try:
                 if self.client:
                     self.client.stop()
+            except Exception:
+                pass
+
+            try:
+                self.sender.disconnect()
             except Exception:
                 pass
 
@@ -287,3 +307,12 @@ class TwitchBot:
             self.stop()
         except Exception:
             pass
+
+    def _get_monitored_channel(self) -> str:
+        if self.client and getattr(self.client, "channel_name", ""):
+            return self.client.channel_name
+
+        token_data = self._token_data or {}
+        login = (token_data.get("login") or "").strip().lower()
+
+        return (TWITCH_CHANNEL or login).strip().lower().lstrip("#")

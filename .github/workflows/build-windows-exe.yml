@@ -1,0 +1,42 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Build EXE
+        run: python -m PyInstaller --clean bot_live.spec
+
+      - name: Package distributable folder
+        shell: powershell
+        run: Compress-Archive -Path dist\BotLive\* -DestinationPath dist\BotLive-windows.zip -Force
+
+      - name: Upload artifact folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: BotLive-windows-folder
+          path: dist/BotLive
+
+      - name: Upload artifact zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: BotLive-windows-zip
+          path: dist/BotLive-windows.zip

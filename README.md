@@ -50,6 +50,54 @@ Se o projeto ainda nao tiver `requirements.txt`, instale as dependencias que o c
 pip install python-dotenv requests boto3 pygame pytchat yt-dlp
 ```
 
+## Gerar EXE
+
+O projeto pode ser empacotado como executavel Windows com PyInstaller.
+
+Arquivos de build incluidos no repositorio:
+
+- `requirements.txt`
+- `bot_live.spec`
+- `build_exe.bat`
+
+Para gerar o executavel:
+
+```powershell
+.\build_exe.bat
+```
+
+Ao final, o executavel sera criado em:
+
+```text
+dist\BotLive\BotLive.exe
+```
+
+Para distribuir:
+
+- entregue a pasta `dist\BotLive`
+- coloque o arquivo `.env` dentro dessa mesma pasta
+- execute `BotLive.exe`
+
+Quando empacotado, o projeto ja foi preparado para procurar o `.env` ao lado do executavel.
+
+### Download pelo GitHub
+
+O repositorio possui workflow para build Windows em:
+
+- `.github/workflows/build-windows-exe.yml`
+
+Voce pode baixar o executavel de duas formas:
+
+- rodando manualmente o workflow em `Actions > Build Windows EXE`
+- criando uma tag `v*`, por exemplo `v1.0.0`, para disparar a build
+
+O workflow publica dois artefatos:
+
+- `BotLive-windows-folder`
+- `BotLive-windows-zip`
+
+Depois de baixar, coloque o `.env` dentro da pasta do executavel antes de rodar.
+
 ## Configuracao
 
 Crie um arquivo `.env` na raiz do projeto com as chaves necessarias.

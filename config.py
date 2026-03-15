@@ -1,50 +1,64 @@
 import os
 import sys
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 
-# ===============================
-# Resolver diretório base real
-# ===============================
 def get_base_dir() -> Path:
-    # Quando estiver empacotado pelo PyInstaller
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
 
-    # Quando estiver rodando em .py normal
     return Path(__file__).resolve().parent
 
 
 BASE_DIR = get_base_dir()
 
-# ===============================
-# Carregar variáveis do .env
-# ===============================
-load_dotenv(BASE_DIR / ".env")
+
+def get_env_search_paths() -> list[Path]:
+    paths = [BASE_DIR / ".env"]
+
+    try:
+        cwd_env = Path.cwd() / ".env"
+        if cwd_env not in paths:
+            paths.append(cwd_env)
+    except Exception:
+        pass
+
+    local_appdata = os.getenv("LOCALAPPDATA", "").strip()
+    if local_appdata:
+        local_env = Path(local_appdata) / "BotLive" / ".env"
+        if local_env not in paths:
+            paths.append(local_env)
+
+    return paths
 
 
-# ===============================
-# Diretórios base
-# ===============================
+def load_app_env() -> Path | None:
+    for env_path in get_env_search_paths():
+        if not env_path.exists():
+            continue
+
+        load_dotenv(env_path, override=True)
+        return env_path
+
+    return None
+
+
+ENV_FILE_PATH = load_app_env()
+
+
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 APP_STATE_FILE = DATA_DIR / "app_state.json"
 
-
-# ===============================
-# TTS
-# ===============================
 TTS_AUDIO_DIR = DATA_DIR / "tts_audio"
 TTS_AUDIO_DIR.mkdir(exist_ok=True)
 
 TTS_CONFIG_FILE = DATA_DIR / "tts_config.json"
 
 
-# ===============================
-# Twitch
-# ===============================
 TOKEN_CACHE_FILE = DATA_DIR / "twitch_token.json"
 
 TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID", "").strip()
@@ -73,9 +87,6 @@ IRC_HOST = "irc.chat.twitch.tv"
 IRC_PORT = 6697
 
 
-# ===============================
-# YouTube
-# ===============================
 YOUTUBE_CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID", "").strip()
 YOUTUBE_CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET", "").strip()
 YOUTUBE_REDIRECT_URI = os.getenv("YOUTUBE_REDIRECT_URI", "").strip()
@@ -85,9 +96,6 @@ YOUTUBE_CONFIG_FILE = DATA_DIR / "youtube_config.json"
 YOUTUBE_MESSAGE_STORE_FILE = DATA_DIR / "youtube_messages.json"
 
 
-# ===============================
-# Amazon Polly
-# ===============================
 AWS_REGION = os.getenv("AWS_REGION", "").strip()
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "").strip()
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
@@ -98,9 +106,6 @@ POLLY_OUTPUT_FORMAT = os.getenv("POLLY_OUTPUT_FORMAT", "mp3").strip()
 POLLY_SAMPLE_RATE = os.getenv("POLLY_SAMPLE_RATE", "24000").strip()
 
 
-# ===============================
-# Validação mínima
-# ===============================
 def validate_local_config(require_twitch: bool = False):
     if not require_twitch:
         return
@@ -121,4 +126,35 @@ def has_twitch_bot_sender_config() -> bool:
         and TWITCH_BOT_ACCESS_TOKEN
         and TWITCH_BOT_CLIENT_ID
         and TWITCH_BOT_CLIENT_SECRET
+    )
+
+
+def validate_required_env_values() -> None:
+    missing = []
+
+    if not AWS_REGION:
+        missing.append("AWS_REGION")
+    if not AWS_ACCESS_KEY_ID:
+        missing.append("AWS_ACCESS_KEY_ID")
+    if not AWS_SECRET_ACCESS_KEY:
+        missing.append("AWS_SECRET_ACCESS_KEY")
+
+    if missing:
+        raise RuntimeError(
+            "Variaveis ausentes no .env: "
+            + ", ".join(missing)
+            + ". Coloque o arquivo .env na mesma pasta do BotLive.exe."
+        )
+
+
+def build_env_help_message() -> str:
+    loaded = str(ENV_FILE_PATH) if ENV_FILE_PATH else "nenhum .env encontrado"
+    paths = "\n".join(f"- {path}" for path in get_env_search_paths())
+
+    return (
+        "Nao foi possivel carregar corretamente o arquivo .env.\n\n"
+        f".env carregado: {loaded}\n\n"
+        "Locais verificados:\n"
+        f"{paths}\n\n"
+        "Coloque o arquivo .env na mesma pasta do BotLive.exe."
     )

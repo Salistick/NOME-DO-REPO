@@ -3,7 +3,9 @@ from config import (
     YOUTUBE_TOKEN_CACHE_FILE,
     YOUTUBE_CONFIG_FILE,
     YOUTUBE_MESSAGE_STORE_FILE,
+    build_env_help_message,
     validate_local_config,
+    validate_required_env_values,
 )
 from app_state import AppStateStore
 from launcher_gui import LauncherGUI
@@ -15,11 +17,25 @@ from services.tts.tts_manager import TTSManager
 
 import threading
 import time
+import traceback
+import tkinter as tk
+from tkinter import messagebox
+
+
+def show_startup_error(message: str):
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("Bot Live - Erro de configuracao", message)
+        root.destroy()
+    except Exception:
+        print(message)
 
 
 def main():
 
     validate_local_config(require_twitch=False)
+    validate_required_env_values()
 
     # ============================
     # Estado do app
@@ -310,4 +326,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        print("[APP] erro fatal:", exc)
+        print(traceback.format_exc())
+        show_startup_error(f"{exc}\n\n{build_env_help_message()}")

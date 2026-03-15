@@ -261,13 +261,16 @@ class LauncherGUI:
         twitch_status = self.twitch_bot.get_status()
         youtube_status = self.youtube_bot.get_status()
 
-        self.twitch_status_var.set(twitch_status)
-        self.youtube_status_var.set(youtube_status)
+        self.twitch_status_var.set(self._format_status(twitch_status))
+        self.youtube_status_var.set(self._format_status(youtube_status))
 
-        self.twitch_button.set_state(twitch_status == "conectado")
-        self.youtube_button.set_state(youtube_status == "conectado")
+        self.twitch_button.set_state(twitch_status.startswith("monitorando") or twitch_status == "conectado")
+        self.youtube_button.set_state(youtube_status.startswith("monitorando") or youtube_status == "conectado")
 
         self.root.after(1000, self._schedule_refresh)
+
+    def _format_status(self, status: str) -> str:
+        return (status or "desconectado").replace("_", " ")
 
     def _on_close(self):
         try:

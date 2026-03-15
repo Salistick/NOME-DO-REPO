@@ -84,6 +84,17 @@ class YouTubeConfigStore:
 
         return accounts[index]
 
+    def find_account_index_by_account_id(self, account_id: str) -> int | None:
+        account_id = (account_id or "").strip()
+        if not account_id:
+            return None
+
+        for index, account in enumerate(self.load()["accounts"]):
+            if (account.get("account_id") or "").strip() == account_id:
+                return index
+
+        return None
+
     def get_channel_by_index(self, index: int) -> dict | None:
         account = self.get_account_by_index(index)
         if not account:

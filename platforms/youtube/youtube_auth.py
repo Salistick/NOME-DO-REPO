@@ -67,8 +67,8 @@ class OAuthCallbackServer:
                 html = """
                 <html>
                   <body style="font-family: Arial;">
-                    <h2>Autorização do YouTube concluída.</h2>
-                    <p>Você pode fechar esta aba e voltar ao bot.</p>
+                    <h2>Autorizacao do YouTube concluida.</h2>
+                    <p>Voce pode fechar esta aba e voltar ao bot.</p>
                   </body>
                 </html>
                 """
@@ -97,10 +97,13 @@ class OAuthCallbackServer:
             except Exception:
                 pass
 
-    def wait_for_code(self, timeout=180):
+    def wait_for_code(self, timeout=180, cancel_event: threading.Event | None = None):
         started = time.time()
 
         while time.time() - started < timeout:
+            if cancel_event is not None and cancel_event.is_set():
+                return None, "cancelled", None
+
             if self.auth_code or self.error:
                 return self.auth_code, self.error, self.state
 
@@ -309,7 +312,7 @@ class YouTubeAuth:
     # Browser login
     # ==================================
 
-    def run_browser_login(self) -> dict:
+    def run_browser_login(self, cancel_event: threading.Event | None = None) -> dict:
         parsed = urllib.parse.urlparse(YOUTUBE_REDIRECT_URI)
 
         host = parsed.hostname or "localhost"
@@ -331,16 +334,20 @@ class YouTubeAuth:
                 daemon=True,
             ).start()
 
-            code, error, returned_state = callback.wait_for_code()
+            code, error, returned_state = callback.wait_for_code(
+                cancel_event=cancel_event
+            )
 
             if error:
-                raise RuntimeError(f"Falha na autorização YouTube: {error}")
+                if error == "cancelled":
+                    raise RuntimeError("Autenticacao do YouTube cancelada.")
+                raise RuntimeError(f"Falha na autorizacao YouTube: {error}")
 
             if not code:
-                raise RuntimeError("Não foi possível obter o código OAuth do YouTube.")
+                raise RuntimeError("Nao foi possivel obter o codigo OAuth do YouTube.")
 
             if returned_state != state:
-                raise RuntimeError("State OAuth inválido no YouTube.")
+                raise RuntimeError("State OAuth invalido no YouTube.")
 
             token_data = self.exchange_code_for_token(code)
 
@@ -364,16 +371,17 @@ class YouTubeAuth:
                 "channels": channels,
             }
 
-            # salva/atualiza no cache de tokens
             self._upsert_account_token(account_payload)
 
-            # salva/atualiza no config
             self.config_store.upsert_account(
                 account_id=account_id,
                 email=email,
                 name=name,
                 channels=channels,
             )
+
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError("Autenticacao do YouTube cancelada.")
 
             return account_payload
 
@@ -384,16 +392,11 @@ class YouTubeAuth:
     # Main token flow
     # ==================================
 
-    def get_valid_account(self) -> dict:
-        """
-        Retorna sempre a conta principal (índice 0), se ela existir.
-        Se estiver expirada, tenta refresh.
-        Se não houver nenhuma, faz OAuth.
-        """
+    def get_valid_account(self, cancel_event: threading.Event | None = None) -> dict:
         accounts = self.list_cached_accounts()
 
         if not accounts:
-            return self.run_browser_login()
+            return self.run_browser_login(cancel_event=cancel_event)
 
         account = accounts[0]
 
@@ -422,7 +425,7 @@ class YouTubeAuth:
             except Exception as exc:
                 print(f"[YOUTUBE AUTH] Falha ao renovar token salvo: {exc}")
 
-        return self.run_browser_login()
+        return self.run_browser_login(cancel_event=cancel_event)
 
     def get_valid_account_by_index(self, index: int) -> dict:
         accounts = self.list_cached_accounts()

@@ -256,7 +256,7 @@ class TwitchBot:
 
         self.client.connect()
 
-        self._status = "conectado"
+        self._status = f"monitorando #{channel}"
 
         print(f"Conectado ao chat da Twitch. Monitorando #{channel}...")
 

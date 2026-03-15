@@ -19,6 +19,8 @@ if not defined PYTHON_EXE (
 echo Instalando dependencias...
 %PYTHON_EXE% -m pip install -r requirements.txt
 if errorlevel 1 exit /b 1
+%PYTHON_EXE% -m pip install -r requirements-build.txt
+if errorlevel 1 exit /b 1
 
 echo Limpando build anterior...
 if exist build rmdir /s /q build

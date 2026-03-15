@@ -1,26 +1,28 @@
-from config import (
-    APP_STATE_FILE,
-    YOUTUBE_TOKEN_CACHE_FILE,
-    YOUTUBE_CONFIG_FILE,
-    YOUTUBE_MESSAGE_STORE_FILE,
-    build_env_help_message,
-    validate_local_config,
-    validate_required_env_values,
-)
-from app_state import AppStateStore
-from launcher_gui import LauncherGUI
-
-from platforms.twitch.twitch_bot import TwitchBot
-from platforms.youtube.youtube_bot import YouTubeBot
-
-from services.tts.tts_manager import TTSManager
-
 import sys
 import threading
 import time
 import traceback
 import tkinter as tk
 from tkinter import messagebox
+
+from app_state import AppStateStore
+from config import (
+    APP_STATE_FILE,
+    DATA_DIR,
+    LOG_DIR,
+    TTS_AUDIO_DIR,
+    YOUTUBE_CONFIG_FILE,
+    YOUTUBE_MESSAGE_STORE_FILE,
+    YOUTUBE_TOKEN_CACHE_FILE,
+    build_env_help_message,
+    validate_local_config,
+    validate_required_env_values,
+)
+from launcher_gui import LauncherGUI
+from logging_setup import configure_logging
+from platforms.twitch.twitch_bot import TwitchBot
+from platforms.youtube.youtube_bot import YouTubeBot
+from services.tts.tts_manager import TTSManager
 
 
 def show_critical_error(message: str):
@@ -63,14 +65,26 @@ def install_exception_hooks() -> None:
     threading.excepthook = handle_thread_exception
 
 
-def main():
+def validate_runtime_environment() -> None:
+    required_dirs = [DATA_DIR, TTS_AUDIO_DIR, LOG_DIR]
 
+    for directory in required_dirs:
+        directory.mkdir(parents=True, exist_ok=True)
+        probe_file = directory / ".write_test"
+        try:
+            probe_file.write_text("ok", encoding="utf-8")
+            probe_file.unlink(missing_ok=True)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Sem permissao de escrita em {directory}. Verifique a pasta do bot."
+            ) from exc
+
+
+def main():
+    configure_logging(LOG_DIR)
     validate_local_config(require_twitch=False)
     validate_required_env_values()
-
-    # ============================
-    # Estado do app
-    # ============================
+    validate_runtime_environment()
 
     app_state_store = AppStateStore(APP_STATE_FILE)
     app_state = app_state_store.load()
@@ -79,18 +93,9 @@ def main():
     app_state["platforms"].setdefault("twitch", {"enabled": False})
     app_state["platforms"].setdefault("youtube", {"enabled": False})
 
-    # ============================
-    # Criar TTS único
-    # ============================
-
     tts_manager = TTSManager()
 
-    # ============================
-    # Criar bots
-    # ============================
-
     twitch_bot = TwitchBot(tts_manager)
-
     youtube_bot = YouTubeBot(
         tts_manager=tts_manager,
         token_cache_file=YOUTUBE_TOKEN_CACHE_FILE,
@@ -98,21 +103,19 @@ def main():
         message_store_file=YOUTUBE_MESSAGE_STORE_FILE,
     )
 
-    # deixa o TTS com acesso ao YouTubeBot para comandos futuros
     tts_manager.youtube_bot = youtube_bot
 
     gui = None
 
-    # evita múltiplas tentativas simultâneas
     twitch_connecting_lock = threading.Lock()
     twitch_connecting = False
+    twitch_connect_attempt = 0
+    twitch_connect_cancel_event = threading.Event()
 
     youtube_connecting_lock = threading.Lock()
     youtube_connecting = False
-
-    # ============================
-    # helpers de estado
-    # ============================
+    youtube_connect_attempt = 0
+    youtube_connect_cancel_event = threading.Event()
 
     def get_app_state():
         return app_state
@@ -122,21 +125,27 @@ def main():
         app_state = new_state
         app_state_store.save(app_state)
 
-    # ============================
-    # conexão twitch
-    # ============================
+    def is_current_twitch_attempt(attempt_id: int, cancel_event: threading.Event) -> bool:
+        return (not cancel_event.is_set()) and attempt_id == twitch_connect_attempt
 
-    def connect_twitch_thread(force_auth: bool):
+    def is_current_youtube_attempt(attempt_id: int, cancel_event: threading.Event) -> bool:
+        return (not cancel_event.is_set()) and attempt_id == youtube_connect_attempt
+
+    def connect_twitch_thread(force_auth: bool, attempt_id: int, cancel_event: threading.Event):
         nonlocal twitch_connecting
 
         try:
+            if not is_current_twitch_attempt(attempt_id, cancel_event):
+                twitch_bot._status = "desconectado"
+                return
+
             cached = twitch_bot.cache.load()
 
-            if (
-                cached
-                and cached.get("access_token")
-                and cached.get("login")
-            ):
+            if cached and cached.get("access_token") and cached.get("login"):
+                if not is_current_twitch_attempt(attempt_id, cancel_event):
+                    twitch_bot._status = "desconectado"
+                    return
+
                 twitch_bot._status = "conectando"
                 twitch_bot.start(cached)
                 return
@@ -146,12 +155,15 @@ def main():
                 return
 
             validate_local_config(require_twitch=True)
-
             twitch_bot._status = "autenticando"
 
-            token_data = twitch_bot.auth.get_valid_token()
+            token_data = twitch_bot.auth.get_valid_token(cancel_event=cancel_event)
 
             if not token_data:
+                twitch_bot._status = "desconectado"
+                return
+
+            if not is_current_twitch_attempt(attempt_id, cancel_event):
                 twitch_bot._status = "desconectado"
                 return
 
@@ -161,12 +173,12 @@ def main():
                 return
 
             for _ in range(20):
+                if not is_current_twitch_attempt(attempt_id, cancel_event):
+                    twitch_bot._status = "desconectado"
+                    return
+
                 cached = twitch_bot.cache.load()
-                if (
-                    cached
-                    and cached.get("access_token")
-                    and cached.get("login")
-                ):
+                if cached and cached.get("access_token") and cached.get("login"):
                     twitch_bot._status = "conectando"
                     twitch_bot.start(cached)
                     return
@@ -176,80 +188,105 @@ def main():
             print("[APP] token Twitch obtido, mas ainda sem login suficiente para conectar ao chat.")
 
         except Exception as e:
-            print("[APP] erro conectando twitch:", e)
-            twitch_bot._status = "erro"
-            show_critical_error(f"Falha critica ao conectar Twitch:\n\n{e}")
+            if not is_current_twitch_attempt(attempt_id, cancel_event):
+                twitch_bot._status = "desconectado"
+            else:
+                print("[APP] erro conectando twitch:", e)
+                twitch_bot._status = "erro"
+                show_critical_error(f"Falha critica ao conectar Twitch:\n\n{e}")
 
         finally:
             with twitch_connecting_lock:
-                twitch_connecting = False
+                if attempt_id == twitch_connect_attempt:
+                    twitch_connecting = False
 
     def auto_connect_twitch_if_cached():
-        nonlocal twitch_connecting
+        nonlocal twitch_connecting, twitch_connect_attempt, twitch_connect_cancel_event
 
         cached = twitch_bot.cache.load()
 
-        if not (
-            cached
-            and cached.get("access_token")
-            and cached.get("login")
-        ):
+        if not (cached and cached.get("access_token") and cached.get("login")):
             return
 
         with twitch_connecting_lock:
             if twitch_connecting or twitch_bot.is_running():
                 return
+            twitch_connect_attempt += 1
+            twitch_connect_cancel_event = threading.Event()
+            attempt_id = twitch_connect_attempt
             twitch_connecting = True
 
         threading.Thread(
             target=connect_twitch_thread,
-            args=(False,),
+            args=(False, attempt_id, twitch_connect_cancel_event),
             daemon=True,
             name="TwitchAutoConnectThread",
         ).start()
 
-    # ============================
-    # conexão youtube
-    # ============================
-
-    def connect_youtube_thread(force_new_oauth: bool):
+    def connect_youtube_thread(force_new_oauth: bool, attempt_id: int, cancel_event: threading.Event):
         nonlocal youtube_connecting
 
         try:
+            if not is_current_youtube_attempt(attempt_id, cancel_event):
+                youtube_bot._status = "desconectado"
+                return
+
             accounts = youtube_bot.auth.list_cached_accounts()
 
-            # startup automático: usa conta principal salva, sem abrir navegador
             if not force_new_oauth:
                 if accounts:
-                    youtube_bot._status = "conectando"
+                    if not is_current_youtube_attempt(attempt_id, cancel_event):
+                        youtube_bot._status = "desconectado"
+                        return
+                    youtube_bot._status = "conectando youtube"
                     youtube_bot.start()
                 else:
                     youtube_bot._status = "desconectado"
                 return
 
-            # clique manual: sempre força novo OAuth
-            youtube_bot._status = "autenticando"
+            youtube_bot._status = "aguardando retorno oauth"
 
-            account = youtube_bot.ensure_authenticated()
+            account = youtube_bot.auth.run_browser_login(cancel_event=cancel_event)
 
             if not account:
                 youtube_bot._status = "desconectado"
                 return
 
-            youtube_bot._status = "conectando"
-            youtube_bot.start()
+            if not is_current_youtube_attempt(attempt_id, cancel_event):
+                youtube_bot._status = "desconectado"
+                return
+
+            account_id = (account.get("account_id") or "").strip()
+
+            if youtube_bot.is_running():
+                activated = youtube_bot.activate_account_by_account_id(account_id)
+                if activated:
+                    youtube_bot._status = "conectado"
+                else:
+                    youtube_bot._status = "erro"
+                    raise RuntimeError("Nao foi possivel ativar automaticamente a nova conta do YouTube.")
+            else:
+                youtube_bot._status = "conectando"
+                youtube_bot.start()
+
+                if account_id:
+                    youtube_bot.activate_account_by_account_id(account_id)
 
         except Exception as e:
-            print("[APP] erro conectando youtube:", e)
-            youtube_bot._status = "erro"
-            show_critical_error(f"Falha critica ao conectar YouTube:\n\n{e}")
+            if not is_current_youtube_attempt(attempt_id, cancel_event):
+                youtube_bot._status = "desconectado"
+            else:
+                print("[APP] erro conectando youtube:", e)
+                youtube_bot._status = "erro"
+                show_critical_error(f"Falha critica ao conectar YouTube:\n\n{e}")
 
         finally:
             with youtube_connecting_lock:
-                youtube_connecting = False
+                if attempt_id == youtube_connect_attempt:
+                    youtube_connecting = False
 
     def auto_connect_youtube_if_cached():
-        nonlocal youtube_connecting
+        nonlocal youtube_connecting, youtube_connect_attempt, youtube_connect_cancel_event
 
         accounts = youtube_bot.auth.list_cached_accounts()
 
@@ -259,78 +296,87 @@ def main():
         with youtube_connecting_lock:
             if youtube_connecting or youtube_bot.is_running():
                 return
+            youtube_connect_attempt += 1
+            youtube_connect_cancel_event = threading.Event()
+            attempt_id = youtube_connect_attempt
             youtube_connecting = True
 
         threading.Thread(
             target=connect_youtube_thread,
-            args=(False,),
+            args=(False, attempt_id, youtube_connect_cancel_event),
             daemon=True,
             name="YouTubeAutoConnectThread",
         ).start()
 
-    # ============================
-    # botão twitch
-    # ============================
-
     def on_toggle_twitch():
-        nonlocal gui, twitch_connecting
+        nonlocal gui, twitch_connecting, twitch_connect_attempt, twitch_connect_cancel_event
 
         if not twitch_bot.is_running():
-
             with twitch_connecting_lock:
                 if twitch_connecting:
+                    twitch_connect_attempt += 1
+                    twitch_connect_cancel_event.set()
+                    twitch_connect_cancel_event = threading.Event()
+                    twitch_connecting = False
+                    twitch_bot._status = "desconectado"
                     return
+
+                twitch_connect_attempt += 1
+                attempt_id = twitch_connect_attempt
+                twitch_connect_cancel_event = threading.Event()
                 twitch_connecting = True
 
             threading.Thread(
                 target=connect_twitch_thread,
-                args=(True,),
+                args=(True, attempt_id, twitch_connect_cancel_event),
                 daemon=True,
                 name="TwitchConnectThread",
             ).start()
-
             return
 
         if gui and gui.confirm_twitch_disconnect():
-
             with twitch_connecting_lock:
+                twitch_connect_attempt += 1
+                twitch_connect_cancel_event.set()
+                twitch_connect_cancel_event = threading.Event()
                 twitch_connecting = False
 
             twitch_bot.disconnect_and_forget()
 
-    # ============================
-    # botão youtube
-    # ============================
-
     def on_toggle_youtube():
-        nonlocal gui, youtube_connecting
+        nonlocal gui, youtube_connecting, youtube_connect_attempt, youtube_connect_cancel_event
 
         if not youtube_bot.is_running():
-
             with youtube_connecting_lock:
                 if youtube_connecting:
+                    youtube_connect_attempt += 1
+                    youtube_connect_cancel_event.set()
+                    youtube_connect_cancel_event = threading.Event()
+                    youtube_connecting = False
+                    youtube_bot._status = "desconectado"
                     return
+
+                youtube_connect_attempt += 1
+                attempt_id = youtube_connect_attempt
+                youtube_connect_cancel_event = threading.Event()
                 youtube_connecting = True
 
             threading.Thread(
                 target=connect_youtube_thread,
-                args=(True,),
+                args=(True, attempt_id, youtube_connect_cancel_event),
                 daemon=True,
                 name="YouTubeConnectThread",
             ).start()
-
             return
 
         if gui and gui.confirm_youtube_disconnect():
-
             with youtube_connecting_lock:
+                youtube_connect_attempt += 1
+                youtube_connect_cancel_event.set()
+                youtube_connect_cancel_event = threading.Event()
                 youtube_connecting = False
 
             youtube_bot.disconnect_and_forget()
-
-    # ============================
-    # GUI
-    # ============================
 
     gui = LauncherGUI(
         twitch_bot=twitch_bot,
@@ -341,17 +387,11 @@ def main():
         save_app_state=save_app_state,
     )
 
-    # auto conexão somente quando já existe auth suficiente
     auto_connect_twitch_if_cached()
     auto_connect_youtube_if_cached()
 
-    # ============================
-    # rodar GUI
-    # ============================
-
     try:
         gui.run()
-
     finally:
         twitch_bot.shutdown()
         youtube_bot.shutdown()

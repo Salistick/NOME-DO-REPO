@@ -34,6 +34,8 @@ ENV_FILE_PATH = load_app_env()
 
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
+LOG_DIR = DATA_DIR / "logs"
+LOG_DIR.mkdir(exist_ok=True)
 
 APP_STATE_FILE = DATA_DIR / "app_state.json"
 

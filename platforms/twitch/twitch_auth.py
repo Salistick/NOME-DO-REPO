@@ -21,7 +21,6 @@ from .twitch_cache import TokenCache
 
 
 class OAuthCallbackServer:
-
     def __init__(self, host: str, port: int):
         self.host = host
         self.port = port
@@ -32,13 +31,10 @@ class OAuthCallbackServer:
         self._thread: Optional[threading.Thread] = None
 
     def start(self):
-
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
-
             def do_GET(self):
-
                 parsed = urllib.parse.urlparse(self.path)
 
                 if parsed.path != "/callback":
@@ -60,8 +56,8 @@ class OAuthCallbackServer:
                 html = """
                 <html>
                   <body style="font-family: Arial;">
-                    <h2>Autorização concluída.</h2>
-                    <p>Você pode fechar esta aba.</p>
+                    <h2>Autorizacao concluida.</h2>
+                    <p>Voce pode fechar esta aba.</p>
                   </body>
                 </html>
                 """
@@ -79,7 +75,6 @@ class OAuthCallbackServer:
         self._thread.start()
 
     def stop(self):
-
         if self._server:
             try:
                 self._server.shutdown()
@@ -91,11 +86,12 @@ class OAuthCallbackServer:
             except Exception:
                 pass
 
-    def wait_for_code(self, timeout=180):
-
+    def wait_for_code(self, timeout=180, cancel_event: threading.Event | None = None):
         start = time.time()
 
         while time.time() - start < timeout:
+            if cancel_event is not None and cancel_event.is_set():
+                return None, "cancelled", None
 
             if self.auth_code or self.error:
                 return self.auth_code, self.error, self.state
@@ -106,7 +102,6 @@ class OAuthCallbackServer:
 
 
 class TwitchAuth:
-
     def __init__(self, cache: TokenCache):
         self.cache = cache
 
@@ -115,7 +110,6 @@ class TwitchAuth:
     # ==================================
 
     def build_auth_url(self, state):
-
         params = {
             "client_id": TWITCH_CLIENT_ID,
             "redirect_uri": TWITCH_REDIRECT_URI,
@@ -132,7 +126,6 @@ class TwitchAuth:
     # ==================================
 
     def exchange_code_for_token(self, code):
-
         payload = {
             "client_id": TWITCH_CLIENT_ID,
             "client_secret": TWITCH_CLIENT_SECRET,
@@ -148,9 +141,7 @@ class TwitchAuth:
         )
 
         if r.status_code != 200:
-            raise RuntimeError(
-                f"Falha ao trocar code por token. {r.text}"
-            )
+            raise RuntimeError(f"Falha ao trocar code por token. {r.text}")
 
         token_data = r.json()
         token_data["expires_at"] = int(time.time()) + int(
@@ -164,7 +155,6 @@ class TwitchAuth:
     # ==================================
 
     def refresh_token(self, refresh_token):
-
         payload = {
             "client_id": TWITCH_CLIENT_ID,
             "client_secret": TWITCH_CLIENT_SECRET,
@@ -179,9 +169,7 @@ class TwitchAuth:
         )
 
         if r.status_code != 200:
-            raise RuntimeError(
-                f"Falha ao renovar token. {r.text}"
-            )
+            raise RuntimeError(f"Falha ao renovar token. {r.text}")
 
         token_data = r.json()
         token_data["expires_at"] = int(time.time()) + int(
@@ -195,7 +183,6 @@ class TwitchAuth:
     # ==================================
 
     def validate_token(self, access_token):
-
         headers = {"Authorization": f"OAuth {access_token}"}
 
         r = requests.get(
@@ -214,11 +201,10 @@ class TwitchAuth:
     # ==================================
 
     def enrich_with_validation(self, token_data: dict) -> dict:
-
         validation = self.validate_token(token_data["access_token"])
 
         if not validation:
-            raise RuntimeError("Token inválido ao validar no endpoint /validate.")
+            raise RuntimeError("Token invalido ao validar no endpoint /validate.")
 
         token_data["login"] = (validation.get("login") or "").lower()
         token_data["user_id"] = validation.get("user_id")
@@ -231,8 +217,7 @@ class TwitchAuth:
     # LOGIN VIA BROWSER
     # ==================================
 
-    def run_browser_login(self):
-
+    def run_browser_login(self, cancel_event: threading.Event | None = None):
         parsed = urllib.parse.urlparse(TWITCH_REDIRECT_URI)
 
         host = parsed.hostname or "localhost"
@@ -244,7 +229,6 @@ class TwitchAuth:
         callback.start()
 
         try:
-
             auth_url = self.build_auth_url(state)
 
             print("Abrindo navegador para autorizar a conta Twitch...")
@@ -255,24 +239,26 @@ class TwitchAuth:
                 daemon=True,
             ).start()
 
-            code, error, returned_state = callback.wait_for_code()
+            code, error, returned_state = callback.wait_for_code(
+                cancel_event=cancel_event
+            )
 
             if error:
+                if error == "cancelled":
+                    raise RuntimeError("Autenticacao da Twitch cancelada.")
                 raise RuntimeError(error)
 
             if not code:
                 raise RuntimeError(
-                    "Não foi possível obter o código OAuth da Twitch."
+                    "Nao foi possivel obter o codigo OAuth da Twitch."
                 )
 
             if returned_state != state:
                 raise RuntimeError(
-                    "State OAuth inválido. Possível resposta adulterada."
+                    "State OAuth invalido. Possivel resposta adulterada."
                 )
 
             token_data = self.exchange_code_for_token(code)
-
-            # salva imediatamente para não atrasar o fluxo
             self.cache.save(token_data)
 
             def validate_async():
@@ -280,19 +266,24 @@ class TwitchAuth:
                     enriched = self.enrich_with_validation(token_data)
                     self.cache.save(enriched)
                 except Exception as e:
-                    print("[TWITCH AUTH] validação posterior falhou:", e)
+                    print("[TWITCH AUTH] validacao posterior falhou:", e)
 
             threading.Thread(
                 target=validate_async,
                 daemon=True,
             ).start()
 
-            # espera curta pelo login aparecer no cache
             for _ in range(20):
+                if cancel_event is not None and cancel_event.is_set():
+                    raise RuntimeError("Autenticacao da Twitch cancelada.")
+
                 cached = self.cache.load()
                 if cached and cached.get("login"):
                     return cached
                 time.sleep(0.1)
+
+            if cancel_event is not None and cancel_event.is_set():
+                raise RuntimeError("Autenticacao da Twitch cancelada.")
 
             return token_data
 
@@ -303,20 +294,14 @@ class TwitchAuth:
     # TOKEN PRINCIPAL
     # ==================================
 
-    def get_valid_token(self):
-
+    def get_valid_token(self, cancel_event: threading.Event | None = None):
         cached = self.cache.load()
 
         if cached and cached.get("access_token"):
-
             now = int(time.time())
             expires_at = int(cached.get("expires_at", 0))
 
-            # usa direto se ainda estiver confortável
-            if (
-                expires_at > now + 60
-                and cached.get("login")
-            ):
+            if expires_at > now + 60 and cached.get("login"):
                 return cached
 
             refresh_token = cached.get("refresh_token")
@@ -325,7 +310,6 @@ class TwitchAuth:
                 try:
                     refreshed = self.refresh_token(refresh_token)
 
-                    # preserva dados anteriores se refresh não trouxer tudo
                     refreshed["login"] = cached.get("login", "")
                     refreshed["user_id"] = cached.get("user_id")
                     refreshed["client_id"] = cached.get("client_id")
@@ -333,7 +317,6 @@ class TwitchAuth:
 
                     self.cache.save(refreshed)
 
-                    # se não tiver login, tenta enriquecer rapidamente
                     if not refreshed.get("login"):
                         try:
                             enriched = self.enrich_with_validation(refreshed)
@@ -347,4 +330,4 @@ class TwitchAuth:
                 except Exception as exc:
                     print(f"[TWITCH AUTH] Falha ao renovar token salvo: {exc}")
 
-        return self.run_browser_login()
+        return self.run_browser_login(cancel_event=cancel_event)

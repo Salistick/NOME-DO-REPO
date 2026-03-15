@@ -267,7 +267,7 @@ class LauncherGUI:
         self.twitch_button.set_state(twitch_status == "conectado")
         self.youtube_button.set_state(youtube_status == "conectado")
 
-        self.root.after(500, self._schedule_refresh)
+        self.root.after(1000, self._schedule_refresh)
 
     def _on_close(self):
         try:

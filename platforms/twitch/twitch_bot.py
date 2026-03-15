@@ -205,8 +205,9 @@ class TwitchBot:
 
             slept = 0.0
             while slept < retry_delay and self._should_reconnect:
-                time.sleep(0.2)
-                slept += 0.2
+                step = min(0.5, retry_delay - slept)
+                time.sleep(step)
+                slept += step
 
             if not self._should_reconnect:
                 break

@@ -46,7 +46,11 @@ class YouTubeBot:
         self._chat_monitor: Optional[YouTubeChatMonitor] = None
 
         self._live_recheck_interval_seconds = 60.0
-        self._no_live_retry_seconds = 5.0
+        self._no_live_retry_seconds = 60.0
+        self._main_loop_sleep_seconds = 2.0
+        self._monitor_restart_delay_seconds = 5.0
+        self._chat_restart_attempts = 0
+        self._max_chat_restart_attempts = 3
 
     # ==================================
     # Status helpers
@@ -117,6 +121,7 @@ class YouTubeBot:
         self._active_account = None
         self._active_channel = None
         self._active_live = None
+        self._chat_restart_attempts = 0
         self._status = "desconectado"
 
     def disconnect_and_forget(self):
@@ -155,6 +160,7 @@ class YouTubeBot:
         self._active_account = account
         self._active_channel = channel
         self._active_live = None
+        self._chat_restart_attempts = 0
 
         self._stop_chat_monitor()
 
@@ -193,6 +199,7 @@ class YouTubeBot:
         self._active_account = self.config_store.get_account_by_index(self._active_account_index)
         self._active_channel = self.config_store.get_channel_by_index(self._active_account_index)
         self._active_live = None
+        self._chat_restart_attempts = 0
 
         self._stop_chat_monitor()
 
@@ -263,13 +270,17 @@ class YouTubeBot:
                     continue
 
             if self._chat_monitor is not None and not self._chat_monitor.is_running():
-                print("[YOUTUBE BOT] Monitor do chat morreu. Reavaliando live ativa imediatamente...")
-                self._stop_chat_monitor()
-                self._active_live = None
-                self._reconcile_live_state()
+                print("[YOUTUBE BOT] Monitor do chat caiu. Tentando reconectar no mesmo video_id...")
+                restarted = self._restart_chat_monitor_for_current_live()
                 last_recheck_at = time.time()
 
-            time.sleep(1.0)
+                if not restarted:
+                    print("[YOUTUBE BOT] Reconexao local falhou. Fazendo nova descoberta da live.")
+                    self._active_live = None
+                    self._reconcile_live_state()
+                    last_recheck_at = time.time()
+
+            self._sleep_with_cancel(self._main_loop_sleep_seconds)
 
     def _load_current_account_and_channel(self):
         account = self.config_store.get_account_by_index(self._active_account_index)
@@ -295,12 +306,21 @@ class YouTubeBot:
             raise RuntimeError("Canal YouTube ativo sem channel_id.")
 
         self._status = "conectando"
-        access_token = self._get_active_account_access_token()
+        current_video_id = ((self._active_live or {}).get("video_id") or "").strip()
+        live_data = None
 
-        live_data = self.live_resolver.resolve_active_live(
-            channel_id=channel_id,
-            access_token=access_token,
-        )
+        if current_video_id:
+            live_data = self.live_resolver.resolve_active_live(channel_id=channel_id)
+            if not live_data:
+                print("[YOUTUBE BOT] Live atual nao foi confirmada. Buscando nova live via API.")
+
+        if live_data is None:
+            access_token = self._get_active_account_access_token()
+            live_data = self.live_resolver.resolve_active_live(
+                channel_id=channel_id,
+                access_token=access_token,
+            )
+
         current_video_id = ((self._active_live or {}).get("video_id") or "").strip()
         new_video_id = ((live_data or {}).get("video_id") or "").strip()
 
@@ -310,11 +330,13 @@ class YouTubeBot:
                 self._stop_chat_monitor()
 
             self._active_live = None
+            self._chat_restart_attempts = 0
             self._status = "aguardando live"
             print(f"[YOUTUBE BOT] Nenhuma live ativa no momento. Nova tentativa em {int(self._no_live_retry_seconds)}s.")
             return
 
         if self._chat_monitor is not None and current_video_id == new_video_id:
+            self._chat_restart_attempts = 0
             self._status = "conectado"
             print(f"[YOUTUBE BOT] Live ativa confirmada e inalterada: {new_video_id}")
             return
@@ -324,6 +346,7 @@ class YouTubeBot:
 
         self._stop_chat_monitor()
         self._active_live = live_data
+        self._chat_restart_attempts = 0
 
         print(
             f"[YOUTUBE BOT] Conta ativa: {self._active_account.get('email', '')} | "
@@ -346,6 +369,45 @@ class YouTubeBot:
         self._status = "conectado"
 
         print(f"[YOUTUBE BOT] Monitorando chat da live {new_video_id}")
+
+    def _restart_chat_monitor_for_current_live(self) -> bool:
+        live_data = self._active_live or {}
+        video_id = (live_data.get("video_id") or "").strip()
+
+        if not video_id:
+            return False
+
+        self._stop_chat_monitor()
+        self._chat_restart_attempts += 1
+
+        if self._chat_restart_attempts > self._max_chat_restart_attempts:
+            print("[YOUTUBE BOT] Limite de reconexoes locais atingido para o chat atual.")
+            self._chat_restart_attempts = 0
+            return False
+
+        self._sleep_with_cancel(self._monitor_restart_delay_seconds)
+
+        if self._manual_stop or not self._should_reconnect:
+            return False
+
+        try:
+            self._chat_monitor = YouTubeChatMonitor(
+                video_id=video_id,
+                on_message=self.handle_incoming_chat_message,
+                restart_interval_seconds=300.0,
+                idle_sleep_seconds=0.5,
+                max_consecutive_failures=3,
+            )
+            self._chat_monitor.start()
+            self._status = "conectado"
+            print(
+                f"[YOUTUBE BOT] Chat reconectado no mesmo video_id={video_id} "
+                f"(tentativa {self._chat_restart_attempts}/{self._max_chat_restart_attempts})."
+            )
+            return True
+        except Exception as exc:
+            print(f"[YOUTUBE BOT] Falha ao reconectar chat localmente: {exc}")
+            return False
 
     def _get_active_account_access_token(self) -> str:
         if self._active_account is None:
@@ -375,8 +437,9 @@ class YouTubeBot:
     def _sleep_with_cancel(self, seconds: float):
         slept = 0.0
         while slept < seconds and self._should_reconnect and not self._manual_stop:
-            time.sleep(0.2)
-            slept += 0.2
+            step = min(0.5, seconds - slept)
+            time.sleep(step)
+            slept += step
 
     # ==================================
     # Message ingress

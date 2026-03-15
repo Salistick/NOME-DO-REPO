@@ -30,7 +30,7 @@ exe = EXE(
     a.datas,
     [],
     exclude_binaries=False,
-    name="BotLive",
+    name="TTSLive",
     icon="icon.ico",
     debug=False,
     bootloader_ignore_signals=False,

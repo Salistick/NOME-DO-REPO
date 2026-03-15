@@ -1,18 +1,18 @@
-#ifndef BotLiveVersion
-#define BotLiveVersion "dev"
+#ifndef TTSLiveVersion
+#define TTSLiveVersion "dev"
 #endif
 
-#define MyAppName "Bot Live"
+#define MyAppName "TTS Live"
 #define MyAppPublisher "Salistick"
-#define MyAppExeName "BotLive.exe"
-#define MyAppInstallerName "BotLiveInstaller"
+#define MyAppExeName "TTSLive.exe"
+#define MyAppInstallerName "TTSLiveInstaller"
 
 [Setup]
 AppId={{2E3AF7D8-A9F3-4D0C-B91F-5600A6F58C11}
 AppName={#MyAppName}
-AppVersion={#BotLiveVersion}
+AppVersion={#TTSLiveVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={localappdata}\BotLive
+DefaultDirName={localappdata}\TTSLive
 DefaultGroupName={#MyAppName}
 OutputDir=dist
 OutputBaseFilename={#MyAppInstallerName}
@@ -32,7 +32,7 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 Name: "desktopicon"; Description: "Criar atalho na area de trabalho"; GroupDescription: "Atalhos adicionais:"
 
 [Files]
-Source: "dist\BotLive.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\TTSLive.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

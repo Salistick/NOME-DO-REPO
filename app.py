@@ -26,7 +26,7 @@ def show_startup_error(message: str):
     try:
         root = tk.Tk()
         root.withdraw()
-        messagebox.showerror("Bot Live - Erro de configuracao", message)
+        messagebox.showerror("TTS Live - Erro de configuracao", message)
         root.destroy()
     except Exception:
         print(message)

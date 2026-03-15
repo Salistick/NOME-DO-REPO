@@ -27,9 +27,10 @@ def get_env_search_paths() -> list[Path]:
 
     local_appdata = os.getenv("LOCALAPPDATA", "").strip()
     if local_appdata:
-        local_env = Path(local_appdata) / "BotLive" / ".env"
-        if local_env not in paths:
-            paths.append(local_env)
+        for folder_name in ("TTSLive", "BotLive"):
+            local_env = Path(local_appdata) / folder_name / ".env"
+            if local_env not in paths:
+                paths.append(local_env)
 
     return paths
 
@@ -143,7 +144,7 @@ def validate_required_env_values() -> None:
         raise RuntimeError(
             "Variaveis ausentes no .env: "
             + ", ".join(missing)
-            + ". Coloque o arquivo .env na mesma pasta do BotLive.exe."
+            + ". Coloque o arquivo .env na mesma pasta do TTSLive.exe."
         )
 
 
@@ -156,5 +157,5 @@ def build_env_help_message() -> str:
         f".env carregado: {loaded}\n\n"
         "Locais verificados:\n"
         f"{paths}\n\n"
-        "Coloque o arquivo .env na mesma pasta do BotLive.exe."
+        "Coloque o arquivo .env na mesma pasta do TTSLive.exe."
     )

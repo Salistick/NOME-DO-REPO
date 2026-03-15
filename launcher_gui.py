@@ -144,7 +144,7 @@ class LauncherGUI:
         self.save_app_state = save_app_state
 
         self.root = tk.Tk()
-        self.root.title("Bot Live")
+        self.root.title("TTS Live")
         self.root.geometry("440x400")
         self.root.resizable(False, False)
         self.root.configure(bg="#111111")
@@ -161,7 +161,7 @@ class LauncherGUI:
 
         title = tk.Label(
             container,
-            text="Bot Live",
+            text="TTS Live",
             font=("Segoe UI", 18, "bold"),
             fg="#FFFFFF",
             bg="#111111"

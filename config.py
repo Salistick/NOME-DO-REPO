@@ -15,35 +15,18 @@ def get_base_dir() -> Path:
 BASE_DIR = get_base_dir()
 
 
-def get_env_search_paths() -> list[Path]:
-    paths = [BASE_DIR / ".env"]
-
-    try:
-        cwd_env = Path.cwd() / ".env"
-        if cwd_env not in paths:
-            paths.append(cwd_env)
-    except Exception:
-        pass
-
-    local_appdata = os.getenv("LOCALAPPDATA", "").strip()
-    if local_appdata:
-        for folder_name in ("TTSLive", "BotLive"):
-            local_env = Path(local_appdata) / folder_name / ".env"
-            if local_env not in paths:
-                paths.append(local_env)
-
-    return paths
+def get_expected_env_path() -> Path:
+    return BASE_DIR / ".env"
 
 
 def load_app_env() -> Path | None:
-    for env_path in get_env_search_paths():
-        if not env_path.exists():
-            continue
+    env_path = get_expected_env_path()
 
-        load_dotenv(env_path, override=True)
-        return env_path
+    if not env_path.exists():
+        return None
 
-    return None
+    load_dotenv(env_path, override=True)
+    return env_path
 
 
 ENV_FILE_PATH = load_app_env()
@@ -131,6 +114,11 @@ def has_twitch_bot_sender_config() -> bool:
 
 
 def validate_required_env_values() -> None:
+    if ENV_FILE_PATH is None:
+        raise RuntimeError(
+            "Arquivo .env nao encontrado. Coloque o .env na mesma pasta do TTSLive.exe."
+        )
+
     missing = []
 
     if not AWS_REGION:
@@ -150,12 +138,12 @@ def validate_required_env_values() -> None:
 
 def build_env_help_message() -> str:
     loaded = str(ENV_FILE_PATH) if ENV_FILE_PATH else "nenhum .env encontrado"
-    paths = "\n".join(f"- {path}" for path in get_env_search_paths())
+    env_path = get_expected_env_path()
 
     return (
         "Nao foi possivel carregar corretamente o arquivo .env.\n\n"
         f".env carregado: {loaded}\n\n"
-        "Locais verificados:\n"
-        f"{paths}\n\n"
+        "Local esperado:\n"
+        f"- {env_path}\n\n"
         "Coloque o arquivo .env na mesma pasta do TTSLive.exe."
     )

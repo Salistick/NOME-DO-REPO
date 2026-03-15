@@ -295,8 +295,12 @@ class YouTubeBot:
             raise RuntimeError("Canal YouTube ativo sem channel_id.")
 
         self._status = "conectando"
+        access_token = self._get_active_account_access_token()
 
-        live_data = self.live_resolver.resolve_active_live(channel_id)
+        live_data = self.live_resolver.resolve_active_live(
+            channel_id=channel_id,
+            access_token=access_token,
+        )
         current_video_id = ((self._active_live or {}).get("video_id") or "").strip()
         new_video_id = ((live_data or {}).get("video_id") or "").strip()
 
@@ -342,6 +346,19 @@ class YouTubeBot:
         self._status = "conectado"
 
         print(f"[YOUTUBE BOT] Monitorando chat da live {new_video_id}")
+
+    def _get_active_account_access_token(self) -> str:
+        if self._active_account is None:
+            return ""
+
+        try:
+            account = self.auth.get_valid_account_by_index(self._active_account_index)
+        except Exception as exc:
+            print(f"[YOUTUBE BOT] Nao foi possivel renovar token da conta ativa: {exc}")
+            return (self._active_account.get("access_token") or "").strip()
+
+        self._active_account = account
+        return (account.get("access_token") or "").strip()
 
     def _stop_chat_monitor(self):
         monitor = self._chat_monitor

@@ -15,6 +15,7 @@ from platforms.youtube.youtube_bot import YouTubeBot
 
 from services.tts.tts_manager import TTSManager
 
+import sys
 import threading
 import time
 import traceback
@@ -22,14 +23,44 @@ import tkinter as tk
 from tkinter import messagebox
 
 
-def show_startup_error(message: str):
+def show_critical_error(message: str):
     try:
         root = tk.Tk()
         root.withdraw()
-        messagebox.showerror("TTS Live - Erro de configuracao", message)
+        messagebox.showerror("TTS Live - Erro critico", message)
         root.destroy()
     except Exception:
         print(message)
+
+
+def format_critical_error_message(exc: BaseException) -> str:
+    details = str(exc).strip() or exc.__class__.__name__
+    return f"{details}\n\n{build_env_help_message()}"
+
+
+def report_critical_exception(exc: BaseException, include_traceback: bool = True) -> None:
+    print("[APP] erro fatal:", exc)
+    if include_traceback:
+        print(traceback.format_exc())
+    show_critical_error(format_critical_error_message(exc))
+
+
+def install_exception_hooks() -> None:
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            return
+
+        print("[APP] excecao nao tratada:")
+        print("".join(traceback.format_exception(exc_type, exc_value, exc_traceback)))
+        show_critical_error(format_critical_error_message(exc_value))
+
+    def handle_thread_exception(args):
+        print(f"[APP] excecao critica na thread {args.thread.name}:")
+        print("".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
+        show_critical_error(format_critical_error_message(args.exc_value))
+
+    sys.excepthook = handle_exception
+    threading.excepthook = handle_thread_exception
 
 
 def main():
@@ -147,6 +178,7 @@ def main():
         except Exception as e:
             print("[APP] erro conectando twitch:", e)
             twitch_bot._status = "erro"
+            show_critical_error(f"Falha critica ao conectar Twitch:\n\n{e}")
 
         finally:
             with twitch_connecting_lock:
@@ -210,6 +242,7 @@ def main():
         except Exception as e:
             print("[APP] erro conectando youtube:", e)
             youtube_bot._status = "erro"
+            show_critical_error(f"Falha critica ao conectar YouTube:\n\n{e}")
 
         finally:
             with youtube_connecting_lock:
@@ -326,9 +359,8 @@ def main():
 
 
 if __name__ == "__main__":
+    install_exception_hooks()
     try:
         main()
     except Exception as exc:
-        print("[APP] erro fatal:", exc)
-        print(traceback.format_exc())
-        show_startup_error(f"{exc}\n\n{build_env_help_message()}")
+        report_critical_exception(exc)

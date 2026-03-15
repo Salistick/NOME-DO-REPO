@@ -424,6 +424,37 @@ class YouTubeAuth:
 
         return self.run_browser_login()
 
+    def get_valid_account_by_index(self, index: int) -> dict:
+        accounts = self.list_cached_accounts()
+
+        if index < 0 or index >= len(accounts):
+            raise RuntimeError("Conta YouTube selecionada nao encontrada no cache.")
+
+        account = accounts[index]
+
+        expires_at = int(account.get("expires_at", 0))
+        refresh_token = account.get("refresh_token", "")
+        access_token = account.get("access_token", "")
+
+        now = int(time.time())
+
+        if access_token and expires_at > now + 60:
+            return account
+
+        if not refresh_token:
+            raise RuntimeError("Conta YouTube sem refresh_token para renovar o acesso.")
+
+        refreshed = self.refresh_token(refresh_token)
+
+        account["access_token"] = refreshed.get("access_token", "")
+        account["expires_at"] = refreshed.get("expires_at", 0)
+
+        if refreshed.get("refresh_token"):
+            account["refresh_token"] = refreshed.get("refresh_token", "")
+
+        self._upsert_account_token(account)
+        return account
+
     # ==================================
     # Multi-account helpers
     # ==================================

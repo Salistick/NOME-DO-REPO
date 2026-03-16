@@ -15,30 +15,36 @@ COMMAND_PREFIX_PATTERN = re.compile(r"^!\w+\s*", re.IGNORECASE)
 NUMBER_SYMBOLS_PATTERN = re.compile(r"[_~^`|\\]+")
 WORD_PATTERN = re.compile(r"\S+")
 GAMER_NUMBER_PATTERN = re.compile(r"\b(\d+(?:[.,]\d+)?)([kKmMbBtT]+)\b")
+ATTACHED_STAT_PATTERN = re.compile(
+    r"\b(\d+(?:[.,]\d+)?)(hp|mp|sp|ml|lvl|lv|fps|hz|ms|cd)\b",
+    re.IGNORECASE,
+)
 PLAIN_NUMBER_PATTERN = re.compile(r"\b\d+\b")
 
-# emoticons simples
 EMOJI_LIKE_PATTERN = re.compile(
     r"(:\)|:-\)|:\(|:-\(|:D|xD|XD|<3|:\*|;\)|;-?\)|:P|:-?P)",
     re.IGNORECASE,
 )
 
-# remove símbolos estranhos mas preserva pontuação útil
-NON_SPEAKABLE_PATTERN = re.compile(r"[^\w\s!?.,:;+\-/%()'\"áàãâéêíóôõúçÁÀÃÂÉÊÍÓÔÕÚÇ]")
-
+NON_SPEAKABLE_PATTERN = re.compile(r"[^\w\s!?.,:;+\-/%()'\"\[\]A-Za-z0-9\u00C0-\u00FF]")
 
 COMMON_REPLACEMENTS = {
-    "vc": "você",
-    "vcs": "vocês",
+    "vc": "voce",
+    "vcs": "voces",
     "pq": "porque",
     "q": "que",
-    "tb": "também",
-    "tbm": "também",
+    "so": "soh",
+    "nao": "nao",
+    "tb": "tambem",
+    "tbm": "tambem",
     "blz": "beleza",
     "msg": "mensagem",
     "obg": "obrigado",
     "vlw": "valeu",
     "tmj": "tamo junto",
+    "pfv": "por favor",
+    "mds": "meu deus",
+    "plmds": "pelo amor de deus",
     "kkk": "risos",
     "kkkk": "risos",
     "kkkkk": "risos",
@@ -50,11 +56,11 @@ COMMON_REPLACEMENTS = {
 GAMER_REPLACEMENTS = {
     "pxg": "p x g",
     "pokexgames": "poke x games",
-    "tibia": "tíbia",
+    "tibia": "tibia",
     "lvl": "level",
     "lv": "level",
-    "xp": "experiência",
-    "exp": "experiência",
+    "xp": "experiencia",
+    "exp": "experiencia",
     "hp": "vida",
     "mp": "mana",
     "sp": "stamina",
@@ -64,17 +70,17 @@ GAMER_REPLACEMENTS = {
     "npc": "n p c",
     "pvp": "p v p",
     "pve": "p v e",
-    "aoe": "área",
+    "aoe": "area",
     "cd": "cooldown",
-    "crit": "crítico",
+    "crit": "critico",
     "build": "biudi",
-    "buff": "bãf",
-    "debuff": "dibãf",
-    "nerf": "nérf",
-    "farm": "fárm",
-    "farming": "fárm",
-    "loot": "lút",
-    "boss": "bóss",
+    "buff": "baf",
+    "debuff": "dibaf",
+    "nerf": "nerf",
+    "farm": "farm",
+    "farming": "farm",
+    "loot": "lut",
+    "boss": "boss",
     "gg": "g g",
     "wp": "u p",
     "afk": "a f k",
@@ -82,6 +88,26 @@ GAMER_REPLACEMENTS = {
     "dc": "desconectou",
     "pk": "p k",
     "ms": "m s",
+    "ml": "m l",
+    "rl": "r l",
+    "fs": "f s",
+    "ss": "s s",
+    "ds": "d s",
+    "ot": "o t",
+    "ts": "t s",
+    "tc": "t c",
+    "sd": "s d",
+    "ue": "u e",
+    "uh": "u h",
+    "bp": "b p",
+    "pb": "p b",
+    "ks": "k s",
+    "fps": "f p s",
+    "atk": "ataque",
+    "def": "defesa",
+    "matk": "m ataque",
+    "mdef": "m defesa",
+    "hz": "hertz",
     "ek": "e k",
     "rp": "r p",
     "ed": "e d",
@@ -91,7 +117,7 @@ UNITS_PT = {
     0: "zero",
     1: "um",
     2: "dois",
-    3: "três",
+    3: "tres",
     4: "quatro",
     5: "cinco",
     6: "seis",
@@ -134,6 +160,9 @@ HUNDREDS_PT = {
 }
 
 
+LAUGH_TOKEN_PATTERN = re.compile(r"\b(?:k{4,}|(?:ha|he|hi|hu|hs|rs){3,})\b", re.IGNORECASE)
+
+
 def strip_accents_for_compare(text: str) -> str:
     normalized = unicodedata.normalize("NFD", text)
     return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
@@ -160,7 +189,7 @@ def replace_multiword_gamer_terms(text: str) -> str:
     result = text
 
     multi_map = {
-        "mini boss": "mini bóss",
+        "mini boss": "mini boss",
         "poke x games": "poke x games",
     }
 
@@ -170,8 +199,16 @@ def replace_multiword_gamer_terms(text: str) -> str:
     return result
 
 
+def normalize_laughs(text: str) -> str:
+    return LAUGH_TOKEN_PATTERN.sub(" risos ", text)
+
+
+def collapse_stretched_words(text: str) -> str:
+    return re.sub(r"([A-Za-z\u00C0-\u00FF])\1{2,}", lambda m: m.group(1) * 2, text)
+
+
 def _replace_word_preserving_punctuation(word: str) -> str:
-    match = re.match(r"^([^\wÀ-ÿ]*)([\wÀ-ÿ]+)([^\wÀ-ÿ]*)$", word, flags=re.UNICODE)
+    match = re.match(r"^([^\w\u00C0-\u00FF]*)([\w\u00C0-\u00FF]+)([^\w\u00C0-\u00FF]*)$", word, flags=re.UNICODE)
     if not match:
         return word
 
@@ -204,13 +241,13 @@ def sanitize_username_for_tts(name: str) -> str:
     text = text.replace(".", " ")
     text = NUMBER_SYMBOLS_PATTERN.sub(" ", text)
 
-    text = re.sub(r"([a-zA-ZÀ-ÿ])(\d)", r"\1 \2", text)
-    text = re.sub(r"(\d)([a-zA-ZÀ-ÿ])", r"\1 \2", text)
+    text = re.sub(r"([a-zA-Z\u00C0-\u00FF])(\d)", r"\1 \2", text)
+    text = re.sub(r"(\d)([a-zA-Z\u00C0-\u00FF])", r"\1 \2", text)
 
     text = MULTISPACE_PATTERN.sub(" ", text).strip()
 
     if not text:
-        return "usuário"
+        return "usuario"
 
     return text
 
@@ -268,9 +305,9 @@ def number_to_pt_br(n: int) -> str:
         rest = n % 1_000_000
 
         if millions == 1:
-            prefix = "um milhão"
+            prefix = "um milhao"
         else:
-            prefix = f"{number_to_pt_br(millions)} milhões"
+            prefix = f"{number_to_pt_br(millions)} milhoes"
 
         if rest == 0:
             return prefix
@@ -283,23 +320,47 @@ def number_to_pt_br(n: int) -> str:
     return " ".join(number_to_pt_br(int(d)) for d in str(n))
 
 
+def _speak_decimal_number(number_part: str) -> str:
+    normalized = number_part.replace(",", ".")
+    if "." in normalized:
+        left, right = normalized.split(".", 1)
+        left_spoken = number_to_pt_br(int(left)) if left.isdigit() else left
+        right_spoken = " ".join(number_to_pt_br(int(ch)) for ch in right if ch.isdigit())
+        return f"{left_spoken} ponto {right_spoken}".strip()
+
+    return number_to_pt_br(int(normalized))
+
+
 def convert_gamer_numbers(text: str) -> str:
     def repl(match: re.Match) -> str:
-        number_part = match.group(1).replace(",", ".")
-        suffix = match.group(2)
-
-        if "." in number_part:
-            left, right = number_part.split(".", 1)
-            left_spoken = number_to_pt_br(int(left)) if left.isdigit() else left
-            right_spoken = " ".join(number_to_pt_br(int(ch)) for ch in right if ch.isdigit())
-            spoken_number = f"{left_spoken} ponto {right_spoken}".strip()
-        else:
-            spoken_number = number_to_pt_br(int(number_part))
-
-        spoken_suffix = " ".join(ch.lower() for ch in suffix)
+        spoken_number = _speak_decimal_number(match.group(1))
+        spoken_suffix = " ".join(ch.lower() for ch in match.group(2))
         return f"{spoken_number} {spoken_suffix}"
 
     return GAMER_NUMBER_PATTERN.sub(repl, text)
+
+
+def convert_attached_stats(text: str) -> str:
+    suffix_map = {
+        "hp": "vida",
+        "mp": "mana",
+        "sp": "stamina",
+        "ml": "m l",
+        "lvl": "level",
+        "lv": "level",
+        "fps": "f p s",
+        "hz": "hertz",
+        "ms": "m s",
+        "cd": "cooldown",
+    }
+
+    def repl(match: re.Match) -> str:
+        spoken_number = _speak_decimal_number(match.group(1))
+        suffix = strip_accents_for_compare(match.group(2).lower())
+        spoken_suffix = suffix_map.get(suffix, " ".join(ch for ch in suffix))
+        return f"{spoken_number} {spoken_suffix}"
+
+    return ATTACHED_STAT_PATTERN.sub(repl, text)
 
 
 def convert_plain_numbers(text: str) -> str:
@@ -389,13 +450,15 @@ def sanitize_chat_text(
     text = NON_SPEAKABLE_PATTERN.sub(" ", text)
 
     text = REPEATED_PUNCT_PATTERN.sub(r"\1", text)
+    text = normalize_laughs(text)
     text = REPEATED_CHAR_PATTERN.sub(lambda m: m.group(1) * 2, text)
+    text = collapse_stretched_words(text)
 
     text = MULTISPACE_PATTERN.sub(" ", text).strip()
 
     text = replace_multiword_gamer_terms(text)
+    text = convert_attached_stats(text)
     text = replace_common_terms(text)
-
     text = convert_gamer_numbers(text)
     text = convert_plain_numbers(text)
 
@@ -412,7 +475,7 @@ def sanitize_chat_text(
     if len(text) > max_length:
         text = text[:max_length].rstrip()
 
-    if not re.search(r"[A-Za-zÀ-ÿ0-9]", text):
+    if not re.search(r"[A-Za-z\u00C0-\u00FF0-9]", text):
         return "", False
 
     return text, truncated
@@ -421,7 +484,7 @@ def sanitize_chat_text(
 def build_tts_text(display_name: str, message_text: str, platform_name: str | None = None) -> str:
     safe_name = sanitize_username_for_tts(display_name)
     if not safe_name:
-        safe_name = "usuário"
+        safe_name = "usuario"
 
     if not message_text:
         return ""
@@ -430,3 +493,6 @@ def build_tts_text(display_name: str, message_text: str, platform_name: str | No
         return f"{safe_name} disse no {platform_name}: {message_text}"
 
     return f"{safe_name} disse: {message_text}"
+
+
+

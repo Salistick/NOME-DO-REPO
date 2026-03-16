@@ -81,6 +81,10 @@ class TTSManager:
             self._handle_lives(payload)
             return
 
+        if command == "!ytoff":
+            self._handle_ytoff(payload)
+            return
+
         if command.startswith("!live") and command != "!lives":
             self._handle_live_switch(payload, command)
             return
@@ -157,6 +161,30 @@ class TTSManager:
             return None
 
         return index
+
+    def _parse_positive_float(self, value: str, allow_zero: bool = False) -> float | None:
+        try:
+            parsed = round(float(value), 1)
+        except (TypeError, ValueError) as exc:
+            print(f"[TTS] valor numerico invalido: {value!r} ({exc})")
+            return None
+
+        if parsed < 0 or (parsed == 0 and not allow_zero):
+            return None
+
+        return parsed
+
+    def _parse_positive_int(self, value: str) -> int | None:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            print(f"[TTS] valor inteiro invalido: {value!r} ({exc})")
+            return None
+
+        if parsed <= 0:
+            return None
+
+        return parsed
 
     # ==================================
     # !ms
@@ -257,6 +285,16 @@ class TTSManager:
 
         self._reply(payload, f"Monitoramento alterado para live {display_index}.")
 
+    def _handle_ytoff(self, payload):
+        youtube_bot = getattr(self, "youtube_bot", None)
+
+        if not youtube_bot:
+            self._reply(payload, "YouTube bot nao esta disponivel.")
+            return
+
+        youtube_bot.disable_monitoring()
+        self._reply(payload, "Monitoramento do YouTube desligado.")
+
     def _handle_clive(self, payload, command):
         youtube_bot = getattr(self, "youtube_bot", None)
 
@@ -288,71 +326,50 @@ class TTSManager:
     # ==================================
 
     def _handle_rate(self, payload, arg):
+        value = self._parse_positive_float(arg)
+        if value is None:
+            return
 
-        try:
+        self.state.rate_seconds = value
+        self.player.set_rate(value)
 
-            value = round(float(arg), 1)
+        self._save_config()
 
-            if value <= 0:
-                return
+        msg = f"Rate alterado para {value}s"
 
-            self.state.rate_seconds = value
-            self.player.set_rate(value)
+        print("[TTS]", msg)
 
-            self._save_config()
-
-            msg = f"Rate alterado para {value}s"
-
-            print("[TTS]", msg)
-
-            self._reply(payload, msg)
-
-        except:
-            pass
+        self._reply(payload, msg)
 
     def _handle_time(self, payload, arg):
+        value = self._parse_positive_float(arg, allow_zero=True)
+        if value is None:
+            return
 
-        try:
+        self.state.user_cooldown_seconds = value
 
-            value = round(float(arg), 1)
+        self._save_config()
 
-            if value < 0:
-                return
+        msg = f"Cooldown entre usuarios alterado para {value}s"
 
-            self.state.user_cooldown_seconds = value
+        print("[TTS]", msg)
 
-            self._save_config()
-
-            msg = f"Cooldown entre usuarios alterado para {value}s"
-
-            print("[TTS]", msg)
-
-            self._reply(payload, msg)
-
-        except:
-            pass
+        self._reply(payload, msg)
 
     def _handle_len(self, payload, arg):
+        value = self._parse_positive_int(arg)
+        if value is None:
+            return
 
-        try:
+        self.state.max_words = value
 
-            value = int(arg)
+        self._save_config()
 
-            if value <= 0:
-                return
+        msg = f"Limite de palavras alterado para {value}"
 
-            self.state.max_words = value
+        print("[TTS]", msg)
 
-            self._save_config()
-
-            msg = f"Limite de palavras alterado para {value}"
-
-            print("[TTS]", msg)
-
-            self._reply(payload, msg)
-
-        except:
-            pass
+        self._reply(payload, msg)
 
     def _handle_pause(self, payload):
 

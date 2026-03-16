@@ -52,6 +52,7 @@ class YouTubeBot:
         self._chat_restart_attempts = 0
         self._max_chat_restart_attempts = 3
         self._current_no_live_retry_seconds = self._no_live_retry_seconds
+        self._monitoring_disabled = False
 
     # ==================================
     # Status helpers
@@ -79,7 +80,7 @@ class YouTubeBot:
     # Public API
     # ==================================
 
-    def start(self):
+    def start(self, preferred_account_index: int | None = None):
         with self._lock:
             if self._thread and self._thread.is_alive():
                 return
@@ -87,10 +88,13 @@ class YouTubeBot:
             self._running = True
             self._manual_stop = False
             self._should_reconnect = True
+            self._monitoring_disabled = False
             self._status = "conectando"
 
-            # ao abrir o bot, sempre volta para a conta principal
-            self._active_account_index = 0
+            if preferred_account_index is not None and preferred_account_index >= 0:
+                self._active_account_index = preferred_account_index
+            else:
+                self._active_account_index = 0
 
             self._thread = threading.Thread(
                 target=self._run_forever,
@@ -125,6 +129,19 @@ class YouTubeBot:
         self._chat_restart_attempts = 0
         self._current_no_live_retry_seconds = self._no_live_retry_seconds
         self._status = "desconectado"
+
+    def disable_monitoring(self):
+        self.stop()
+        self._monitoring_disabled = True
+        self._status = "monitoramento desligado"
+
+    def set_monitoring_disabled(self, disabled: bool):
+        self._monitoring_disabled = bool(disabled)
+        if self._monitoring_disabled and not self._running:
+            self._status = "monitoramento desligado"
+
+    def is_monitoring_disabled(self) -> bool:
+        return self._monitoring_disabled
 
     def disconnect_and_forget(self):
         # No YouTube, desconectar só para o monitor atual.
@@ -164,6 +181,7 @@ class YouTubeBot:
         self._active_live = None
         self._chat_restart_attempts = 0
         self._current_no_live_retry_seconds = self._no_live_retry_seconds
+        self._monitoring_disabled = False
 
         self._stop_chat_monitor()
 
@@ -212,6 +230,45 @@ class YouTubeBot:
     def list_accounts_summary_lines(self) -> list[str]:
         return self.config_store.build_accounts_summary_lines()
 
+    def list_account_choices(self) -> list[dict]:
+        choices = []
+
+        for idx, line in enumerate(self.config_store.build_accounts_summary_lines(), start=1):
+            choices.append(
+                {
+                    "display_index": idx,
+                    "label": line,
+                    "active": self._running and self._active_account_index == (idx - 1),
+                }
+            )
+
+        return choices
+
+    def activate_account_by_display_index(self, display_index: int) -> bool:
+        if display_index <= 0:
+            return False
+
+        index = display_index - 1
+        account = self.config_store.get_account_by_index(index)
+        channel = self.config_store.get_channel_by_index(index)
+
+        if not account or not channel:
+            return False
+
+        self._monitoring_disabled = False
+
+        if not self._running:
+            self._active_account_index = index
+            self._active_account = account
+            self._active_channel = channel
+            self._active_live = None
+            self._chat_restart_attempts = 0
+            self._current_no_live_retry_seconds = self._no_live_retry_seconds
+            self.start(preferred_account_index=index)
+            return True
+
+        return self.switch_account_by_display_index(display_index)
+
     def activate_account_by_account_id(self, account_id: str) -> bool:
         index = self.config_store.find_account_index_by_account_id(account_id)
         if index is None:
@@ -231,6 +288,7 @@ class YouTubeBot:
         self._active_live = None
         self._chat_restart_attempts = 0
         self._current_no_live_retry_seconds = self._no_live_retry_seconds
+        self._monitoring_disabled = False
 
         self._stop_chat_monitor()
 
@@ -282,6 +340,11 @@ class YouTubeBot:
         last_recheck_at = 0.0
 
         while self._should_reconnect and not self._manual_stop:
+            if self._monitoring_disabled:
+                self._status = "monitoramento desligado"
+                self._sleep_with_cancel(1.0)
+                continue
+
             self._load_current_account_and_channel()
 
             if not self._active_account or not self._active_channel:

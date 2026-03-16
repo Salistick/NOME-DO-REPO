@@ -81,10 +81,10 @@ def validate_runtime_environment() -> None:
 
 
 def main():
+    validate_runtime_environment()
     configure_logging(LOG_DIR)
     validate_local_config(require_twitch=False)
     validate_required_env_values()
-    validate_runtime_environment()
 
     app_state_store = AppStateStore(APP_STATE_FILE)
     app_state = app_state_store.load()
@@ -105,6 +105,9 @@ def main():
 
     tts_manager.youtube_bot = youtube_bot
 
+    youtube_disabled = bool(app_state["platforms"].get("youtube", {}).get("disabled", False))
+    youtube_bot.set_monitoring_disabled(youtube_disabled)
+
     gui = None
 
     twitch_connecting_lock = threading.Lock()
@@ -124,6 +127,13 @@ def main():
         nonlocal app_state
         app_state = new_state
         app_state_store.save(app_state)
+
+    def set_youtube_disabled(disabled: bool):
+        new_state = get_app_state()
+        new_state.setdefault("platforms", {})
+        new_state["platforms"].setdefault("youtube", {"enabled": False})
+        new_state["platforms"]["youtube"]["disabled"] = bool(disabled)
+        save_app_state(new_state)
 
     def is_current_twitch_attempt(attempt_id: int, cancel_event: threading.Event) -> bool:
         return (not cancel_event.is_set()) and attempt_id == twitch_connect_attempt
@@ -240,6 +250,7 @@ def main():
                         return
                     youtube_bot._status = "conectando youtube"
                     youtube_bot.start()
+                    set_youtube_disabled(False)
                 else:
                     youtube_bot._status = "desconectado"
                 return
@@ -261,13 +272,14 @@ def main():
             if youtube_bot.is_running():
                 activated = youtube_bot.activate_account_by_account_id(account_id)
                 if activated:
-                    youtube_bot._status = "conectado"
+                    set_youtube_disabled(False)
                 else:
                     youtube_bot._status = "erro"
                     raise RuntimeError("Nao foi possivel ativar automaticamente a nova conta do YouTube.")
             else:
                 youtube_bot._status = "conectando"
                 youtube_bot.start()
+                set_youtube_disabled(False)
 
                 if account_id:
                     youtube_bot.activate_account_by_account_id(account_id)
@@ -290,7 +302,7 @@ def main():
 
         accounts = youtube_bot.auth.list_cached_accounts()
 
-        if not accounts:
+        if not accounts or youtube_bot.is_monitoring_disabled():
             return
 
         with youtube_connecting_lock:
@@ -343,40 +355,55 @@ def main():
 
             twitch_bot.disconnect_and_forget()
 
-    def on_toggle_youtube():
+    def on_toggle_youtube(action="new", display_index: int | None = None):
         nonlocal gui, youtube_connecting, youtube_connect_attempt, youtube_connect_cancel_event
-
-        if not youtube_bot.is_running():
-            with youtube_connecting_lock:
-                if youtube_connecting:
-                    youtube_connect_attempt += 1
-                    youtube_connect_cancel_event.set()
-                    youtube_connect_cancel_event = threading.Event()
-                    youtube_connecting = False
-                    youtube_bot._status = "desconectado"
-                    return
-
-                youtube_connect_attempt += 1
-                attempt_id = youtube_connect_attempt
-                youtube_connect_cancel_event = threading.Event()
-                youtube_connecting = True
-
-            threading.Thread(
-                target=connect_youtube_thread,
-                args=(True, attempt_id, youtube_connect_cancel_event),
-                daemon=True,
-                name="YouTubeConnectThread",
-            ).start()
-            return
-
-        if gui and gui.confirm_youtube_disconnect():
+        if action == "disable":
             with youtube_connecting_lock:
                 youtube_connect_attempt += 1
                 youtube_connect_cancel_event.set()
                 youtube_connect_cancel_event = threading.Event()
                 youtube_connecting = False
 
-            youtube_bot.disconnect_and_forget()
+            youtube_bot.disable_monitoring()
+            set_youtube_disabled(True)
+            return
+
+        if action == "select":
+            with youtube_connecting_lock:
+                if youtube_connecting:
+                    youtube_connect_attempt += 1
+                    youtube_connect_cancel_event.set()
+                    youtube_connect_cancel_event = threading.Event()
+                    youtube_connecting = False
+
+            if display_index is not None:
+                ok = youtube_bot.activate_account_by_display_index(display_index)
+                if not ok:
+                    show_critical_error("Nao foi possivel ativar a conta selecionada do YouTube.")
+                else:
+                    set_youtube_disabled(False)
+            return
+
+        with youtube_connecting_lock:
+            if youtube_connecting:
+                youtube_connect_attempt += 1
+                youtube_connect_cancel_event.set()
+                youtube_connect_cancel_event = threading.Event()
+                youtube_connecting = False
+                youtube_bot._status = "desconectado"
+                return
+
+            youtube_connect_attempt += 1
+            attempt_id = youtube_connect_attempt
+            youtube_connect_cancel_event = threading.Event()
+            youtube_connecting = True
+
+        threading.Thread(
+            target=connect_youtube_thread,
+            args=(True, attempt_id, youtube_connect_cancel_event),
+            daemon=True,
+            name="YouTubeConnectThread",
+        ).start()
 
     gui = LauncherGUI(
         twitch_bot=twitch_bot,

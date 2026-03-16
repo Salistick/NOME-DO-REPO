@@ -83,7 +83,7 @@ class RoundedToggleButton(tk.Canvas):
         if self.is_on:
             fill = self.bg_on
             offset_y = 3
-            label = f"✔ {self.base_text}"
+            label = f"Ativo: {self.base_text}"
         else:
             fill = self.bg_off
             offset_y = 0
@@ -151,6 +151,7 @@ class LauncherGUI:
 
         self.twitch_status_var = tk.StringVar(value="desconectado")
         self.youtube_status_var = tk.StringVar(value="desconectado")
+        self.youtube_menu_window = None
 
         self._build()
         self._schedule_refresh()
@@ -192,23 +193,21 @@ class LauncherGUI:
         twitch_status_frame = tk.Frame(container, bg="#111111")
         twitch_status_frame.pack()
 
-        twitch_status_title = tk.Label(
+        tk.Label(
             twitch_status_frame,
             text="Status Twitch:",
             font=("Segoe UI", 10, "bold"),
             fg="#FFFFFF",
             bg="#111111"
-        )
-        twitch_status_title.pack(side="left")
+        ).pack(side="left")
 
-        twitch_status_value = tk.Label(
+        tk.Label(
             twitch_status_frame,
             textvariable=self.twitch_status_var,
             font=("Segoe UI", 10),
             fg="#BBBBBB",
             bg="#111111"
-        )
-        twitch_status_value.pack(side="left", padx=(6, 0))
+        ).pack(side="left", padx=(6, 0))
 
         self.youtube_button = RoundedToggleButton(
             container,
@@ -218,44 +217,147 @@ class LauncherGUI:
             radius=18,
             bg_off="#FF3B30",
             bg_on="#B3261E",
-            command=self.on_toggle_youtube
+            command=self._open_youtube_menu
         )
         self.youtube_button.pack(pady=(22, 12))
 
         youtube_status_frame = tk.Frame(container, bg="#111111")
         youtube_status_frame.pack()
 
-        youtube_status_title = tk.Label(
+        tk.Label(
             youtube_status_frame,
             text="Status YouTube:",
             font=("Segoe UI", 10, "bold"),
             fg="#FFFFFF",
             bg="#111111"
-        )
-        youtube_status_title.pack(side="left")
+        ).pack(side="left")
 
-        youtube_status_value = tk.Label(
+        tk.Label(
             youtube_status_frame,
             textvariable=self.youtube_status_var,
             font=("Segoe UI", 10),
             fg="#BBBBBB",
             bg="#111111"
-        )
-        youtube_status_value.pack(side="left", padx=(6, 0))
+        ).pack(side="left", padx=(6, 0))
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def confirm_twitch_disconnect(self) -> bool:
         return messagebox.askyesno(
             "Desconectar Twitch",
-            "Deseja realmente desconectar a Twitch e esquecer a autenticação salva?\n\nNa próxima conexão, o login no navegador será solicitado novamente."
+            "Deseja realmente desconectar a Twitch e esquecer a autenticacao salva?\n\nNa proxima conexao, o login no navegador sera solicitado novamente."
         )
 
-    def confirm_youtube_disconnect(self) -> bool:
-        return messagebox.askyesno(
-            "Desconectar YouTube",
-            "Deseja realmente desconectar o YouTube?\n\nA autenticação salva continuará disponível para reconexão futura."
-        )
+    def _open_youtube_menu(self):
+        if self.youtube_menu_window is not None:
+            try:
+                self.youtube_menu_window.lift()
+                self.youtube_menu_window.focus_force()
+                return
+            except Exception:
+                self.youtube_menu_window = None
+
+        window = tk.Toplevel(self.root)
+        window.title("YouTube")
+        window.geometry("360x420")
+        window.resizable(False, False)
+        window.configure(bg="#111111")
+        window.transient(self.root)
+        window.grab_set()
+        self.youtube_menu_window = window
+
+        def close_window():
+            try:
+                window.grab_release()
+            except Exception:
+                pass
+            self.youtube_menu_window = None
+            window.destroy()
+
+        tk.Label(
+            window,
+            text="Monitoramento do YouTube",
+            font=("Segoe UI", 14, "bold"),
+            fg="#FFFFFF",
+            bg="#111111",
+        ).pack(pady=(18, 8))
+
+        tk.Label(
+            window,
+            text="Escolha uma acao ou uma conta autenticada",
+            font=("Segoe UI", 10),
+            fg="#BBBBBB",
+            bg="#111111",
+        ).pack(pady=(0, 16))
+
+        buttons_frame = tk.Frame(window, bg="#111111")
+        buttons_frame.pack(fill="both", expand=True, padx=20)
+
+        def add_action_button(label, callback, top_pad=0):
+            button = tk.Button(
+                buttons_frame,
+                text=label,
+                command=lambda: [close_window(), callback()],
+                font=("Segoe UI", 10, "bold"),
+                bg="#202020",
+                fg="#FFFFFF",
+                activebackground="#303030",
+                activeforeground="#FFFFFF",
+                relief="flat",
+                padx=12,
+                pady=10,
+                cursor="hand2",
+            )
+            button.pack(fill="x", pady=(top_pad, 8))
+
+        add_action_button("Conectar nova conta", lambda: self.on_toggle_youtube("new"))
+        add_action_button("Desligar monitoramento", lambda: self.on_toggle_youtube("disable"))
+
+        choices = self.youtube_bot.list_account_choices()
+
+        if choices:
+            tk.Label(
+                buttons_frame,
+                text="Contas salvas",
+                font=("Segoe UI", 10, "bold"),
+                fg="#DDDDDD",
+                bg="#111111",
+            ).pack(anchor="w", pady=(12, 8))
+
+            for choice in choices:
+                label = choice["label"]
+                if choice.get("active"):
+                    label = f"{label} [ativo]"
+
+                add_action_button(
+                    label,
+                    lambda display_index=choice["display_index"]: self.on_toggle_youtube("select", display_index),
+                )
+        else:
+            tk.Label(
+                buttons_frame,
+                text="Nenhuma conta autenticada ainda.",
+                font=("Segoe UI", 10),
+                fg="#BBBBBB",
+                bg="#111111",
+            ).pack(anchor="w", pady=(12, 8))
+
+        tk.Button(
+            window,
+            text="Fechar",
+            command=close_window,
+            font=("Segoe UI", 10),
+            bg="#2A2A2A",
+            fg="#FFFFFF",
+            activebackground="#3A3A3A",
+            activeforeground="#FFFFFF",
+            relief="flat",
+            padx=12,
+            pady=8,
+            cursor="hand2",
+        ).pack(pady=(0, 18))
+
+        window.protocol("WM_DELETE_WINDOW", close_window)
 
     def _schedule_refresh(self):
         twitch_status = self.twitch_bot.get_status()

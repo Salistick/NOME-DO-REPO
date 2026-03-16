@@ -5,6 +5,14 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
+class _NullStream(io.TextIOBase):
+    def write(self, text):
+        return len(text or "")
+
+    def flush(self):
+        return None
+
+
 class _StreamToLogger(io.TextIOBase):
     def __init__(self, logger: logging.Logger, level: int, stream):
         self._logger = logger
@@ -16,8 +24,9 @@ class _StreamToLogger(io.TextIOBase):
         if not text:
             return 0
 
-        self._stream.write(text)
-        self._stream.flush()
+        if self._stream is not None:
+            self._stream.write(text)
+            self._stream.flush()
 
         self._buffer += text
         while "\n" in self._buffer:
@@ -29,10 +38,19 @@ class _StreamToLogger(io.TextIOBase):
         return len(text)
 
     def flush(self):
-        self._stream.flush()
+        if self._stream is not None:
+            self._stream.flush()
         if self._buffer.strip():
             self._logger.log(self._level, self._buffer.strip())
         self._buffer = ""
+
+
+def _get_console_stream(preferred_stream, fallback_stream):
+    for stream in (preferred_stream, fallback_stream):
+        if stream is not None and hasattr(stream, "write"):
+            return stream
+
+    return _NullStream()
 
 
 def configure_logging(log_dir: Path) -> Path:
@@ -57,12 +75,22 @@ def configure_logging(log_dir: Path) -> Path:
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    console_handler = logging.StreamHandler(sys.__stdout__)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
+    console_stream = _get_console_stream(sys.__stdout__, sys.stdout)
+    if not isinstance(console_stream, _NullStream):
+        console_handler = logging.StreamHandler(console_stream)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
 
-    sys.stdout = _StreamToLogger(logger, logging.INFO, sys.__stdout__)
-    sys.stderr = _StreamToLogger(logger, logging.ERROR, sys.__stderr__)
+    sys.stdout = _StreamToLogger(
+        logger,
+        logging.INFO,
+        _get_console_stream(sys.__stdout__, sys.stdout),
+    )
+    sys.stderr = _StreamToLogger(
+        logger,
+        logging.ERROR,
+        _get_console_stream(sys.__stderr__, sys.stderr),
+    )
 
     logging.info("Logging inicializado em %s", log_file)
     return log_file

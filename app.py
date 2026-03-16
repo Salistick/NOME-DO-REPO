@@ -107,6 +107,7 @@ def main():
 
     youtube_disabled = bool(app_state["platforms"].get("youtube", {}).get("disabled", False))
     youtube_bot.set_monitoring_disabled(youtube_disabled)
+    youtube_bot.refresh_idle_status()
 
     gui = None
 
@@ -238,19 +239,14 @@ def main():
 
         try:
             if not is_current_youtube_attempt(attempt_id, cancel_event):
-                youtube_bot._status = "desconectado"
+                youtube_bot.refresh_idle_status()
                 return
 
             accounts = youtube_bot.auth.list_cached_accounts()
 
             if not force_new_oauth:
                 if accounts:
-                    if not is_current_youtube_attempt(attempt_id, cancel_event):
-                        youtube_bot._status = "desconectado"
-                        return
-                    youtube_bot._status = "conectando youtube"
-                    youtube_bot.start()
-                    set_youtube_disabled(False)
+                    youtube_bot.refresh_idle_status()
                 else:
                     youtube_bot._status = "desconectado"
                 return
@@ -260,33 +256,18 @@ def main():
             account = youtube_bot.auth.run_browser_login(cancel_event=cancel_event)
 
             if not account:
-                youtube_bot._status = "desconectado"
+                youtube_bot.refresh_idle_status()
                 return
 
             if not is_current_youtube_attempt(attempt_id, cancel_event):
-                youtube_bot._status = "desconectado"
+                youtube_bot.refresh_idle_status()
                 return
 
-            account_id = (account.get("account_id") or "").strip()
-
-            if youtube_bot.is_running():
-                activated = youtube_bot.activate_account_by_account_id(account_id)
-                if activated:
-                    set_youtube_disabled(False)
-                else:
-                    youtube_bot._status = "erro"
-                    raise RuntimeError("Nao foi possivel ativar automaticamente a nova conta do YouTube.")
-            else:
-                youtube_bot._status = "conectando"
-                youtube_bot.start()
-                set_youtube_disabled(False)
-
-                if account_id:
-                    youtube_bot.activate_account_by_account_id(account_id)
+            youtube_bot.refresh_idle_status()
 
         except Exception as e:
             if not is_current_youtube_attempt(attempt_id, cancel_event):
-                youtube_bot._status = "desconectado"
+                youtube_bot.refresh_idle_status()
             else:
                 print("[APP] erro conectando youtube:", e)
                 youtube_bot._status = "erro"
@@ -296,29 +277,6 @@ def main():
             with youtube_connecting_lock:
                 if attempt_id == youtube_connect_attempt:
                     youtube_connecting = False
-
-    def auto_connect_youtube_if_cached():
-        nonlocal youtube_connecting, youtube_connect_attempt, youtube_connect_cancel_event
-
-        accounts = youtube_bot.auth.list_cached_accounts()
-
-        if not accounts or youtube_bot.is_monitoring_disabled():
-            return
-
-        with youtube_connecting_lock:
-            if youtube_connecting or youtube_bot.is_running():
-                return
-            youtube_connect_attempt += 1
-            youtube_connect_cancel_event = threading.Event()
-            attempt_id = youtube_connect_attempt
-            youtube_connecting = True
-
-        threading.Thread(
-            target=connect_youtube_thread,
-            args=(False, attempt_id, youtube_connect_cancel_event),
-            daemon=True,
-            name="YouTubeAutoConnectThread",
-        ).start()
 
     def on_toggle_twitch():
         nonlocal gui, twitch_connecting, twitch_connect_attempt, twitch_connect_cancel_event
@@ -415,7 +373,6 @@ def main():
     )
 
     auto_connect_twitch_if_cached()
-    auto_connect_youtube_if_cached()
 
     try:
         gui.run()

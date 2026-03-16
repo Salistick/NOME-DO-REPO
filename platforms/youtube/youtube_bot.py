@@ -53,6 +53,7 @@ class YouTubeBot:
         self._max_chat_restart_attempts = 3
         self._current_no_live_retry_seconds = self._no_live_retry_seconds
         self._monitoring_disabled = False
+        self.refresh_idle_status()
 
     # ==================================
     # Status helpers
@@ -66,6 +67,20 @@ class YouTubeBot:
 
     def has_saved_auth(self) -> bool:
         return bool(self.auth.list_cached_accounts())
+
+    def refresh_idle_status(self):
+        if self._running:
+            return
+
+        if self._monitoring_disabled:
+            self._status = "monitoramento desligado"
+            return
+
+        if self.has_saved_auth():
+            self._status = "aguardando selecao de live"
+            return
+
+        self._status = "desconectado"
 
     def get_active_channel(self) -> Optional[dict]:
         return self._active_channel
@@ -128,17 +143,17 @@ class YouTubeBot:
         self._active_live = None
         self._chat_restart_attempts = 0
         self._current_no_live_retry_seconds = self._no_live_retry_seconds
-        self._status = "desconectado"
+        self.refresh_idle_status()
 
     def disable_monitoring(self):
         self.stop()
         self._monitoring_disabled = True
-        self._status = "monitoramento desligado"
+        self.refresh_idle_status()
 
     def set_monitoring_disabled(self, disabled: bool):
         self._monitoring_disabled = bool(disabled)
-        if self._monitoring_disabled and not self._running:
-            self._status = "monitoramento desligado"
+        if not self._running:
+            self.refresh_idle_status()
 
     def is_monitoring_disabled(self) -> bool:
         return self._monitoring_disabled
@@ -210,7 +225,7 @@ class YouTubeBot:
             self._active_channel = None
             self._active_live = None
             self._stop_chat_monitor()
-            self._status = "desconectado"
+            self.refresh_idle_status()
             return True
 
         current_display = self._active_account_index + 1
@@ -280,8 +295,6 @@ class YouTubeBot:
         if not account or not channel:
             return False
 
-        print(f"[YOUTUBE BOT] Ativando automaticamente nova conta: {channel.get('title', '')}")
-
         self._active_account_index = index
         self._active_account = account
         self._active_channel = channel
@@ -291,12 +304,7 @@ class YouTubeBot:
         self._monitoring_disabled = False
 
         self._stop_chat_monitor()
-
-        if self._running and self._should_reconnect and not self._manual_stop:
-            try:
-                self._reconcile_live_state()
-            except Exception as exc:
-                print(f"[YOUTUBE BOT] Erro ao ativar automaticamente nova conta: {exc}")
+        self.refresh_idle_status()
 
         return True
 
@@ -334,7 +342,7 @@ class YouTubeBot:
         self._running = False
 
         if self._manual_stop or not self._should_reconnect:
-            self._status = "desconectado"
+            self.refresh_idle_status()
 
     def _run_main_loop(self):
         last_recheck_at = 0.0

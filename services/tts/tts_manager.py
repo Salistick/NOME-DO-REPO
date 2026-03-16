@@ -277,7 +277,7 @@ class TTSManager:
             self._reply(payload, "Uso: !live1, !live2, !live3...")
             return
 
-        ok = youtube_bot.switch_account_by_display_index(display_index)
+        ok = youtube_bot.activate_account_by_display_index(display_index)
 
         if not ok:
             self._reply(payload, f"Live {display_index} nao encontrada.")

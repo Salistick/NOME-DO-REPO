@@ -154,7 +154,65 @@ class LauncherGUI:
         self.youtube_menu_window = None
 
         self._build()
+        self._restore_or_center_main_window()
         self._schedule_refresh()
+
+    def _center_window(self, window, width: int | None = None, height: int | None = None):
+        window.update_idletasks()
+
+        current_width = width or window.winfo_width() or window.winfo_reqwidth()
+        current_height = height or window.winfo_height() or window.winfo_reqheight()
+
+        screen_width = window.winfo_screenwidth()
+        screen_height = window.winfo_screenheight()
+
+        pos_x = max(0, (screen_width - current_width) // 2)
+        pos_y = max(0, (screen_height - current_height) // 2)
+
+        window.geometry(f"{current_width}x{current_height}+{pos_x}+{pos_y}")
+
+    def _center_child_window(self, child, parent, width: int | None = None, height: int | None = None):
+        parent.update_idletasks()
+        child.update_idletasks()
+
+        current_width = width or child.winfo_width() or child.winfo_reqwidth()
+        current_height = height or child.winfo_height() or child.winfo_reqheight()
+
+        parent_width = parent.winfo_width()
+        parent_height = parent.winfo_height()
+        parent_x = parent.winfo_rootx()
+        parent_y = parent.winfo_rooty()
+
+        pos_x = max(0, parent_x + (parent_width - current_width) // 2)
+        pos_y = max(0, parent_y + (parent_height - current_height) // 2)
+
+        child.geometry(f"{current_width}x{current_height}+{pos_x}+{pos_y}")
+
+    def _restore_or_center_main_window(self):
+        state = self.get_app_state() or {}
+        window_state = state.get("window") or {}
+        geometry = window_state.get("main_geometry")
+
+        if geometry:
+            try:
+                self.root.geometry(str(geometry))
+                self.root.update_idletasks()
+                return
+            except Exception:
+                pass
+
+        self._center_window(self.root, width=440, height=400)
+
+    def _save_main_window_geometry(self):
+        try:
+            geometry = self.root.geometry()
+        except Exception:
+            return
+
+        state = self.get_app_state() or {}
+        state.setdefault("window", {})
+        state["window"]["main_geometry"] = geometry
+        self.save_app_state(state)
 
     def _build(self):
         container = tk.Frame(self.root, bg="#111111")
@@ -245,7 +303,8 @@ class LauncherGUI:
     def confirm_twitch_disconnect(self) -> bool:
         return messagebox.askyesno(
             "Desconectar Twitch",
-            "Deseja realmente desconectar a Twitch e esquecer a autenticacao salva?\n\nNa proxima conexao, o login no navegador sera solicitado novamente."
+            "Deseja realmente desconectar a Twitch e esquecer a autenticacao salva?\n\nNa proxima conexao, o login no navegador sera solicitado novamente.",
+            parent=self.root,
         )
 
     def _open_youtube_menu(self):
@@ -265,6 +324,7 @@ class LauncherGUI:
         window.transient(self.root)
         window.grab_set()
         self.youtube_menu_window = window
+        self._center_child_window(window, self.root, width=360, height=420)
 
         def close_window():
             try:
@@ -375,6 +435,8 @@ class LauncherGUI:
         return (status or "desconectado").replace("_", " ")
 
     def _on_close(self):
+        self._save_main_window_geometry()
+
         try:
             if self.twitch_bot.is_running():
                 self.twitch_bot.stop()

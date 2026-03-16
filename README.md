@@ -49,7 +49,7 @@ YOUTUBE_REDIRECT_URI=
 AWS_REGION=
 AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
-POLLY_VOICE_ID=Camila
+POLLY_VOICE_ID=Ricardo
 POLLY_ENGINE=neural
 POLLY_OUTPUT_FORMAT=mp3
 POLLY_SAMPLE_RATE=24000
@@ -82,6 +82,7 @@ Ao iniciar:
 - `!modosub` - alterna modo apenas para subs/mods
 - `!config` - mostra configuracao atual
 - `!lives` - lista contas/lives salvas do YouTube
+- `!ytoff` - desliga todo o monitoramento do YouTube
 - `!live1`, `!live2`, ... - troca o monitoramento do YouTube
 - `!clive1`, `!clive2`, ... - remove uma conta/live salva
 

@@ -28,8 +28,8 @@ class AudioPlayer:
     # Controle da fila
     # ==========================
 
-    def enqueue(self, audio_file: Path, priority: bool = False):
-        if self.stopped:
+    def enqueue(self, audio_file: Path, priority: bool = False, bypass_state: bool = False):
+        if self.stopped and not bypass_state:
             return
 
         if priority:
@@ -100,7 +100,7 @@ class AudioPlayer:
 
         while self._running:
 
-            if self.paused or self.stopped:
+            if (self.paused or self.stopped) and self.priority_queue.empty():
                 time.sleep(0.1)
                 continue
 
@@ -123,9 +123,13 @@ class AudioPlayer:
                 print(f"[TTS] erro ao tocar áudio: {exc}")
 
             finally:
+                try:
+                    pygame.mixer.music.unload()
+                except Exception:
+                    pass
                 self._safe_delete(audio_file)
 
-            time.sleep(self.rate_seconds)
+            self._sleep_between_items()
 
     # ==========================
     # Limpeza segura
@@ -147,6 +151,17 @@ class AudioPlayer:
                 q.get_nowait()
             except queue.Empty:
                 break
+
+    def _sleep_between_items(self):
+        slept = 0.0
+
+        while slept < self.rate_seconds and self._running:
+            if not self.priority_queue.empty():
+                return
+
+            step = min(0.1, self.rate_seconds - slept)
+            time.sleep(step)
+            slept += step
 
     def _cleanup_audio_dir(self):
 

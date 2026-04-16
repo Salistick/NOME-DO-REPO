@@ -19,6 +19,7 @@ ATTACHED_STAT_PATTERN = re.compile(
     r"\b(\d+(?:[.,]\d+)?)(hp|mp|sp|ml|lvl|lv|fps|hz|ms|cd)\b",
     re.IGNORECASE,
 )
+ORDINAL_NUMBER_PATTERN = re.compile(r"\b(\d+)(?:°|º)(?=\s|$)")
 PLAIN_NUMBER_PATTERN = re.compile(r"\b\d+\b")
 
 EMOJI_LIKE_PATTERN = re.compile(
@@ -157,6 +158,42 @@ HUNDREDS_PT = {
     700: "setecentos",
     800: "oitocentos",
     900: "novecentos",
+}
+
+ORDINAL_UNITS_PT = {
+    1: "primeiro",
+    2: "segundo",
+    3: "terceiro",
+    4: "quarto",
+    5: "quinto",
+    6: "sexto",
+    7: "setimo",
+    8: "oitavo",
+    9: "nono",
+}
+
+ORDINAL_TENS_PT = {
+    10: "decimo",
+    20: "vigesimo",
+    30: "trigesimo",
+    40: "quadragesimo",
+    50: "quinquagesimo",
+    60: "sexagesimo",
+    70: "septuagesimo",
+    80: "octogesimo",
+    90: "nonagesimo",
+}
+
+ORDINAL_HUNDREDS_PT = {
+    100: "centesimo",
+    200: "ducentesimo",
+    300: "trecentesimo",
+    400: "quadringentesimo",
+    500: "quingentesimo",
+    600: "sexcentesimo",
+    700: "septingentesimo",
+    800: "octingentesimo",
+    900: "nongentesimo",
 }
 
 
@@ -331,6 +368,42 @@ def _speak_decimal_number(number_part: str) -> str:
     return number_to_pt_br(int(normalized))
 
 
+def ordinal_to_pt_br(n: int) -> str:
+    if n <= 0:
+        return number_to_pt_br(n)
+
+    if n < 10:
+        return ORDINAL_UNITS_PT[n]
+
+    if n < 100:
+        tens = (n // 10) * 10
+        rest = n % 10
+        prefix = ORDINAL_TENS_PT.get(tens)
+        if prefix is None:
+            return number_to_pt_br(n)
+        if rest == 0:
+            return prefix
+        return f"{prefix} {ordinal_to_pt_br(rest)}"
+
+    if n < 1000:
+        hundreds = (n // 100) * 100
+        rest = n % 100
+        prefix = ORDINAL_HUNDREDS_PT.get(hundreds)
+        if prefix is None:
+            return number_to_pt_br(n)
+        if rest == 0:
+            return prefix
+        return f"{prefix} {ordinal_to_pt_br(rest)}"
+
+    if n == 1000:
+        return "milesimo"
+
+    if n < 2000:
+        return f"milesimo {ordinal_to_pt_br(n - 1000)}"
+
+    return number_to_pt_br(n)
+
+
 def convert_gamer_numbers(text: str) -> str:
     def repl(match: re.Match) -> str:
         spoken_number = _speak_decimal_number(match.group(1))
@@ -361,6 +434,14 @@ def convert_attached_stats(text: str) -> str:
         return f"{spoken_number} {spoken_suffix}"
 
     return ATTACHED_STAT_PATTERN.sub(repl, text)
+
+
+def convert_ordinal_numbers(text: str) -> str:
+    def repl(match: re.Match) -> str:
+        value = int(match.group(1))
+        return ordinal_to_pt_br(value)
+
+    return ORDINAL_NUMBER_PATTERN.sub(repl, text)
 
 
 def convert_plain_numbers(text: str) -> str:
@@ -444,6 +525,7 @@ def sanitize_chat_text(
     text = URL_PATTERN.sub(" ", text)
     text = MENTION_PATTERN.sub(" ", text)
     text = COMMAND_PREFIX_PATTERN.sub("", text)
+    text = convert_ordinal_numbers(text)
     text = EMOJI_LIKE_PATTERN.sub(" ", text)
 
     text = remove_emojis_and_symbols(text)

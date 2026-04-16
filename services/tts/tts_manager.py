@@ -229,10 +229,6 @@ class TTSManager:
     # ==================================
 
     def _handle_mm(self, payload, message):
-
-        if self.state.stopped:
-            return
-
         text, _ = sanitize_chat_text(
             message,
             max_words=self.state.max_words,
@@ -243,7 +239,7 @@ class TTSManager:
 
         tts_text = build_tts_text(payload.get("display_name", "usuario"), text)
 
-        self._queue_audio(tts_text, priority=True)
+        self._queue_audio(tts_text, priority=True, bypass_state=True)
 
     # ==================================
     # Comandos YouTube via Twitch
@@ -396,6 +392,16 @@ class TTSManager:
         self._reply(payload, msg)
 
     def _handle_resume(self, payload):
+        was_paused = self.state.paused or self.player.paused
+        was_stopped = self.state.stopped or self.player.stopped
+
+        if not was_paused and not was_stopped:
+            msg = "Player nao esta pausado nem parado"
+
+            print("[TTS]", msg)
+
+            self._reply(payload, msg)
+            return
 
         self.state.paused = False
         self.state.stopped = False
@@ -439,14 +445,14 @@ class TTSManager:
     # Fila de audio
     # ==================================
 
-    def _queue_audio(self, text, priority=False):
+    def _queue_audio(self, text, priority=False, bypass_state: bool = False):
 
         def worker():
 
             try:
 
                 audio_path = self.polly.synthesize(text)
-                self.player.enqueue(audio_path, priority=priority)
+                self.player.enqueue(audio_path, priority=priority, bypass_state=bypass_state)
 
             except Exception as e:
 

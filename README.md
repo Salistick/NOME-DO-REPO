@@ -81,14 +81,10 @@ Ao iniciar:
 - `!resume` - retoma o player
 - `!modosub` - alterna modo apenas para subs/mods
 - `!config` - mostra configuracao atual
-- `!lives` - lista contas/lives salvas do YouTube
-- `!ytoff` - desliga todo o monitoramento do YouTube
-- `!live1`, `!live2`, ... - troca o monitoramento do YouTube
-- `!clive1`, `!clive2`, ... - remove uma conta/live salva
 
 ## Observacoes
 
 - O projeto foi organizado para uso local/desktop.
 - Tokens e configuracoes ficam persistidos em `data/`.
 - O YouTube depende de live ativa para iniciar o monitoramento de chat.
-- O TTS usa sanitizacao de texto para reduzir spam e melhorar a fala em PT-BR.
+- O TTS usa sanitizaçao de texto para reduzir spam e melhorar a fala em PT-BR.

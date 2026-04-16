@@ -27,6 +27,12 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt -r requirements-build.txt
 
+      - name: Prepare version file
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path build_assets | Out-Null
+          Set-Content -Path build_assets/version.txt -Value $env:TTSLIVE_VERSION
+
       - name: Build EXE
         run: python -m PyInstaller --clean bot_live.spec
 

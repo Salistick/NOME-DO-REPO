@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 from app_state import AppStateStore
+from auto_updater import try_start_auto_update
 from config import (
     APP_STATE_FILE,
     DATA_DIR,
@@ -83,6 +84,8 @@ def validate_runtime_environment() -> None:
 def main():
     validate_runtime_environment()
     configure_logging(LOG_DIR)
+    if try_start_auto_update():
+        return
     validate_local_config(require_twitch=False)
     validate_required_env_values()
 

@@ -303,7 +303,7 @@ class LauncherGUI:
     def confirm_twitch_disconnect(self) -> bool:
         return messagebox.askyesno(
             "Desconectar Twitch",
-            "Deseja realmente desconectar a Twitch e esquecer a autenticacao salva?\n\nNa proxima conexao, o login no navegador sera solicitado novamente.",
+            "Deseja realmente desconectar a Twitch e esquecer a autenticação salva?\n\nNa proxima conexão, o login no navegador sera solicitado novamente.",
             parent=self.root,
         )
 
@@ -344,7 +344,7 @@ class LauncherGUI:
 
         tk.Label(
             window,
-            text="Escolha uma acao ou uma conta autenticada",
+            text="Escolha uma ação ou uma conta autenticada",
             font=("Segoe UI", 10),
             fg="#BBBBBB",
             bg="#111111",

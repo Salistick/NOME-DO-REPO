@@ -4,3 +4,6 @@ __pycache__/
 build/
 dist/
 build_assets/
+.venv/
+TTSLive.exe
+TTSLiveInstaller.exe

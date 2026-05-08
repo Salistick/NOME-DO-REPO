@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import messagebox
 
+from app_version import CURRENT_APP_VERSION
+
 
 class RoundedToggleButton(tk.Canvas):
     def __init__(
@@ -157,6 +159,12 @@ class LauncherGUI:
         self._restore_or_center_main_window()
         self._schedule_refresh()
 
+    def _get_version_label_text(self) -> str:
+        version = (CURRENT_APP_VERSION or "").strip() or "dev"
+        if not version.lower().startswith("v"):
+            version = f"v{version}"
+        return version
+
     def _center_window(self, window, width: int | None = None, height: int | None = None):
         window.update_idletasks()
 
@@ -297,6 +305,18 @@ class LauncherGUI:
             fg="#BBBBBB",
             bg="#111111"
         ).pack(side="left", padx=(6, 0))
+
+        footer_frame = tk.Frame(container, bg="#111111")
+        footer_frame.pack(side="bottom", fill="x", pady=(18, 0))
+
+        tk.Label(
+            footer_frame,
+            text=self._get_version_label_text(),
+            font=("Segoe UI", 9),
+            fg="#5C5C5C",
+            bg="#111111",
+            anchor="e",
+        ).pack(side="right")
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 

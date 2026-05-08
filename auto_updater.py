@@ -118,6 +118,9 @@ def try_start_auto_update(notify: Callable[[str], None] | None = None) -> bool:
         return False
     current_version = _normalize_tag(raw_current_version)
 
+    if notify:
+        notify("Verificando atualizacoes...")
+
     try:
         response = requests.get(
             LATEST_RELEASE_API_URL,
@@ -146,12 +149,12 @@ def try_start_auto_update(notify: Callable[[str], None] | None = None) -> bool:
         return False
 
     if notify:
-        notify(
-            f"Nova versao encontrada ({latest_tag}). O TTS Live vai baixar e instalar a atualizacao automaticamente."
-        )
+        notify(f"Nova versao encontrada ({latest_tag}). Baixando atualizacao...")
 
     try:
         installer_path = _download_installer(download_url, latest_tag)
+        if notify:
+            notify(f"Atualizacao {latest_tag} pronta. Instalando...")
         current_exe = Path(sys.executable).resolve()
         script_path = _write_update_script(installer_path, current_exe, os.getpid())
         _launch_update_script(script_path)

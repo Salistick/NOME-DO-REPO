@@ -143,9 +143,14 @@ class YouTubeLiveResolver:
             if not video_id or video_id != cached_video_id:
                 continue
 
-            candidate_url = entry.get("url") or f"https://www.youtube.com/watch?v={video_id}"
-            detailed = self._extract_info(candidate_url)
-            return self._build_live_data_if_active(detailed, source="streams")
+            live_data = self._build_live_data_from_stream_entry(entry, source="streams")
+            if live_data:
+                return live_data
+
+            detailed = self._extract_info(self._build_watch_url(video_id))
+            live_data = self._build_live_data_if_active(detailed, source="streams")
+            if live_data:
+                return live_data
 
         return None
 
@@ -244,8 +249,11 @@ class YouTubeLiveResolver:
             if not video_id:
                 continue
 
-            candidate_url = entry.get("url") or f"https://www.youtube.com/watch?v={video_id}"
-            detailed = self._extract_info(candidate_url)
+            live_data = self._build_live_data_from_stream_entry(entry, source="streams")
+            if live_data:
+                return live_data
+
+            detailed = self._extract_info(self._build_watch_url(video_id))
             live_data = self._build_live_data_if_active(detailed, source="streams")
             if live_data:
                 return live_data
@@ -277,6 +285,27 @@ class YouTubeLiveResolver:
             "live_url": info.get("webpage_url") or f"https://www.youtube.com/watch?v={video_id}",
         }
 
+    def _build_live_data_from_stream_entry(self, entry: dict | None, source: str) -> dict | None:
+        if not entry:
+            return None
+
+        video_id = (entry.get("id") or "").strip()
+        if not video_id:
+            return None
+
+        live_status = (entry.get("live_status") or "").strip()
+        is_live = bool(entry.get("is_live"))
+
+        if live_status != "is_live" and not is_live:
+            return None
+
+        return {
+            "video_id": video_id,
+            "title": entry.get("title") or "Live ativa",
+            "source": source,
+            "live_url": self._build_watch_url(video_id),
+        }
+
     # ==================================
     # Utils
     # ==================================
@@ -287,3 +316,6 @@ class YouTubeLiveResolver:
                 return ydl.extract_info(url, download=False)
         except Exception:
             return None
+
+    def _build_watch_url(self, video_id: str) -> str:
+        return f"https://www.youtube.com/watch?v={video_id}"

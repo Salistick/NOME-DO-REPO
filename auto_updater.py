@@ -15,6 +15,8 @@ GITHUB_OWNER = "Salistick"
 GITHUB_REPO = "NOME-DO-REPO"
 LATEST_RELEASE_API_URL = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 INSTALLER_ASSET_NAME = "TTSLiveInstaller.exe"
+INSTALLED_EXE_NAME = "TTSLive.exe"
+INSTALL_DIR_NAME = "TTSLive"
 UPDATE_DIR_NAME = "TTSLiveUpdater"
 SKIP_UPDATE_VERSIONS = {"", "dev", "manual"}
 
@@ -71,11 +73,25 @@ def _download_installer(download_url: str, tag_name: str) -> Path:
     return installer_path
 
 
-def _write_update_script(installer_path: Path, current_exe: Path, current_pid: int) -> Path:
+def _get_expected_installed_exe_path(current_exe: Path) -> Path:
+    local_app_data = (os.getenv("LOCALAPPDATA") or "").strip()
+    if local_app_data:
+        return Path(local_app_data) / INSTALL_DIR_NAME / INSTALLED_EXE_NAME
+    return current_exe
+
+
+def _write_update_script(
+    installer_path: Path,
+    current_exe: Path,
+    installed_exe: Path,
+    current_pid: int,
+) -> Path:
     script_path = installer_path.with_suffix(".cmd")
 
     script = f"""@echo off
 setlocal
+set "CURRENT_EXE={current_exe}"
+set "INSTALLED_EXE={installed_exe}"
 
 :wait_for_old_process
 tasklist /FI "PID eq {current_pid}" 2>NUL | find "{current_pid}" >NUL
@@ -89,7 +105,12 @@ set "INSTALL_EXIT=%ERRORLEVEL%"
 
 if "%INSTALL_EXIT%"=="0" (
     del /f /q "{installer_path}" >NUL 2>NUL
-    start "" "{current_exe}"
+
+    if exist "%INSTALLED_EXE%" (
+        start "" "%INSTALLED_EXE%"
+    ) else if exist "%CURRENT_EXE%" (
+        start "" "%CURRENT_EXE%"
+    )
 )
 
 start "" cmd /c del /f /q "%~f0" >NUL 2>NUL
@@ -156,7 +177,8 @@ def try_start_auto_update(notify: Callable[[str], None] | None = None) -> bool:
         if notify:
             notify(f"Atualizacao {latest_tag} pronta. Instalando...")
         current_exe = Path(sys.executable).resolve()
-        script_path = _write_update_script(installer_path, current_exe, os.getpid())
+        installed_exe = _get_expected_installed_exe_path(current_exe)
+        script_path = _write_update_script(installer_path, current_exe, installed_exe, os.getpid())
         _launch_update_script(script_path)
         return True
     except Exception as exc:

@@ -451,6 +451,7 @@ def main():
         gui = LauncherGUI(
             twitch_bot=twitch_bot,
             youtube_bot=youtube_bot,
+            tts_manager=tts_manager,
             on_toggle_twitch=on_toggle_twitch,
             on_toggle_youtube=on_toggle_youtube,
             get_app_state=get_app_state,

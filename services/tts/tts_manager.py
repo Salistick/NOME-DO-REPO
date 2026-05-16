@@ -21,7 +21,17 @@ class TTSManager:
         self.state = TTSState.from_persisted_dict(config_data)
 
         self.polly = PollyClient(TTS_AUDIO_DIR)
-        self.player = AudioPlayer(TTS_AUDIO_DIR, rate_seconds=self.state.rate_seconds)
+        self.player = AudioPlayer(
+            TTS_AUDIO_DIR,
+            rate_seconds=self.state.rate_seconds,
+            output_device_name=self.state.audio_output_device,
+        )
+
+        active_audio_device = self.player.get_output_device_name()
+        if active_audio_device != self.state.audio_output_device:
+            self.state.audio_output_device = active_audio_device
+            self._save_config()
+
         self._synth_executor = ThreadPoolExecutor(
             max_workers=3,
             thread_name_prefix="TTSSynth",
@@ -33,6 +43,53 @@ class TTSManager:
         self.youtube_bot = None
 
         self.player.start()
+
+    # ==================================
+    # Saida de audio
+    # ==================================
+
+    def list_audio_output_devices(self) -> list[str]:
+        return self.player.get_output_devices()
+
+    def refresh_audio_output_devices(self) -> list[str]:
+        devices = self.player.refresh_output_devices()
+        active_device = self.player.get_output_device_name()
+
+        if active_device != self.state.audio_output_device:
+            self.state.audio_output_device = active_device
+            self._save_config()
+
+        return devices
+
+    def get_audio_output_device(self) -> str:
+        return self.state.audio_output_device
+
+    def set_audio_output_device(self, output_device_name: str) -> tuple[bool, str]:
+        output_device_name = (output_device_name or "").strip()
+        devices = self.list_audio_output_devices()
+
+        if output_device_name and devices and output_device_name not in devices:
+            return False, "Saida de audio nao encontrada no sistema."
+
+        try:
+            active_device = self.player.set_output_device(output_device_name)
+        except Exception as exc:
+            return False, str(exc)
+
+        self.state.audio_output_device = active_device
+        self._save_config()
+
+        if output_device_name and active_device != output_device_name:
+            return False, "Nao foi possivel iniciar essa saida. O bot voltou para o padrao do sistema."
+
+        return True, ""
+
+    def play_audio_test(self) -> tuple[bool, str]:
+        try:
+            self.player.play_test_tone()
+            return True, ""
+        except Exception as exc:
+            return False, str(exc)
 
     # ==================================
     # Entrada principal

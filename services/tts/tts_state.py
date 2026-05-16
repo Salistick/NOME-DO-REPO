@@ -23,6 +23,7 @@ class TTSState:
     rate_seconds: float = 2.5
     user_cooldown_seconds: float = 5.0
     max_words: int = 20
+    audio_output_device: str = ""
 
     # voláteis
     paused: bool = False
@@ -38,6 +39,7 @@ class TTSState:
             "rate_seconds": self.rate_seconds,
             "user_cooldown_seconds": self.user_cooldown_seconds,
             "max_words": self.max_words,
+            "audio_output_device": self.audio_output_device,
         }
 
     @classmethod
@@ -48,6 +50,7 @@ class TTSState:
             rate_seconds=float(data.get("rate_seconds", 2.5)),
             user_cooldown_seconds=float(data.get("user_cooldown_seconds", 5.0)),
             max_words=int(data.get("max_words", 20)),
+            audio_output_device=str(data.get("audio_output_device", "") or "").strip(),
             paused=False,
             stopped=False,
         )

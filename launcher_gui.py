@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 
 from app_version import CURRENT_APP_VERSION
 
@@ -129,10 +129,13 @@ class RoundedToggleButton(tk.Canvas):
 
 
 class LauncherGUI:
+    AUDIO_DEFAULT_LABEL = "Padrao do sistema"
+
     def __init__(
         self,
         twitch_bot,
         youtube_bot,
+        tts_manager,
         on_toggle_twitch,
         on_toggle_youtube,
         get_app_state,
@@ -140,6 +143,7 @@ class LauncherGUI:
     ):
         self.twitch_bot = twitch_bot
         self.youtube_bot = youtube_bot
+        self.tts_manager = tts_manager
         self.on_toggle_twitch = on_toggle_twitch
         self.on_toggle_youtube = on_toggle_youtube
         self.get_app_state = get_app_state
@@ -147,12 +151,14 @@ class LauncherGUI:
 
         self.root = tk.Tk()
         self.root.title("TTS Live")
-        self.root.geometry("440x400")
+        self.root.geometry("440x480")
         self.root.resizable(False, False)
         self.root.configure(bg="#111111")
 
         self.twitch_status_var = tk.StringVar(value="desconectado")
         self.youtube_status_var = tk.StringVar(value="desconectado")
+        self.audio_output_var = tk.StringVar(value="")
+        self.audio_output_by_label = {}
         self.youtube_menu_window = None
 
         self._build()
@@ -164,6 +170,30 @@ class LauncherGUI:
         if not version.lower().startswith("v"):
             version = f"v{version}"
         return version
+
+    def _configure_styles(self):
+        style = ttk.Style(self.root)
+
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+        style.configure(
+            "TTS.TCombobox",
+            fieldbackground="#202020",
+            background="#202020",
+            foreground="#FFFFFF",
+            arrowcolor="#FFFFFF",
+            bordercolor="#303030",
+            lightcolor="#303030",
+            darkcolor="#303030",
+        )
+        style.map(
+            "TTS.TCombobox",
+            fieldbackground=[("readonly", "#202020")],
+            foreground=[("readonly", "#FFFFFF")],
+        )
 
     def _center_window(self, window, width: int | None = None, height: int | None = None):
         window.update_idletasks()
@@ -205,11 +235,17 @@ class LauncherGUI:
             try:
                 self.root.geometry(str(geometry))
                 self.root.update_idletasks()
+                current_width = max(self.root.winfo_width(), 440)
+                current_height = max(self.root.winfo_height(), 480)
+                if current_width != self.root.winfo_width() or current_height != self.root.winfo_height():
+                    pos_x = max(0, self.root.winfo_x())
+                    pos_y = max(0, self.root.winfo_y())
+                    self.root.geometry(f"{current_width}x{current_height}+{pos_x}+{pos_y}")
                 return
             except Exception:
                 pass
 
-        self._center_window(self.root, width=440, height=400)
+        self._center_window(self.root, width=440, height=480)
 
     def _save_main_window_geometry(self):
         try:
@@ -223,6 +259,8 @@ class LauncherGUI:
         self.save_app_state(state)
 
     def _build(self):
+        self._configure_styles()
+
         container = tk.Frame(self.root, bg="#111111")
         container.pack(fill="both", expand=True, padx=24, pady=24)
 
@@ -306,6 +344,61 @@ class LauncherGUI:
             bg="#111111"
         ).pack(side="left", padx=(6, 0))
 
+        audio_frame = tk.Frame(container, bg="#111111")
+        audio_frame.pack(fill="x", pady=(24, 0))
+
+        tk.Label(
+            audio_frame,
+            text="Saida de audio",
+            font=("Segoe UI", 10, "bold"),
+            fg="#FFFFFF",
+            bg="#111111",
+        ).pack(anchor="w")
+
+        audio_controls_frame = tk.Frame(audio_frame, bg="#111111")
+        audio_controls_frame.pack(fill="x", pady=(8, 0))
+
+        self.audio_output_combo = ttk.Combobox(
+            audio_controls_frame,
+            textvariable=self.audio_output_var,
+            state="readonly",
+            values=[],
+            width=32,
+            style="TTS.TCombobox",
+        )
+        self.audio_output_combo.pack(side="left", fill="x", expand=True)
+        self.audio_output_combo.bind("<<ComboboxSelected>>", self._on_audio_output_selected)
+
+        tk.Button(
+            audio_controls_frame,
+            text="Atualizar",
+            command=lambda: self._refresh_audio_outputs(rescan=True),
+            font=("Segoe UI", 9, "bold"),
+            bg="#202020",
+            fg="#FFFFFF",
+            activebackground="#303030",
+            activeforeground="#FFFFFF",
+            relief="flat",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side="left", padx=(8, 0))
+
+        tk.Button(
+            audio_controls_frame,
+            text="Testar",
+            command=self._test_audio_output,
+            font=("Segoe UI", 9, "bold"),
+            bg="#202020",
+            fg="#FFFFFF",
+            activebackground="#303030",
+            activeforeground="#FFFFFF",
+            relief="flat",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side="left", padx=(8, 0))
+
         footer_frame = tk.Frame(container, bg="#111111")
         footer_frame.pack(side="bottom", fill="x", pady=(18, 0))
 
@@ -318,7 +411,75 @@ class LauncherGUI:
             anchor="e",
         ).pack(side="right")
 
+        self._refresh_audio_outputs(show_error=False)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _refresh_audio_outputs(self, show_error: bool = True, rescan: bool = False):
+        try:
+            if rescan:
+                devices = self.tts_manager.refresh_audio_output_devices()
+            else:
+                devices = self.tts_manager.list_audio_output_devices()
+            selected_device = self.tts_manager.get_audio_output_device()
+        except Exception as exc:
+            devices = []
+            selected_device = ""
+            if show_error:
+                messagebox.showerror(
+                    "Saida de audio",
+                    f"Nao foi possivel listar as saidas de audio:\n\n{exc}",
+                    parent=self.root,
+                )
+
+        labels = [self.AUDIO_DEFAULT_LABEL]
+        self.audio_output_by_label = {self.AUDIO_DEFAULT_LABEL: ""}
+
+        for device in devices:
+            labels.append(device)
+            self.audio_output_by_label[device] = device
+
+        selected_label = self.AUDIO_DEFAULT_LABEL
+
+        if selected_device:
+            if selected_device in self.audio_output_by_label:
+                selected_label = selected_device
+            else:
+                unavailable_label = f"{selected_device} [indisponivel]"
+                labels.append(unavailable_label)
+                self.audio_output_by_label[unavailable_label] = selected_device
+                selected_label = unavailable_label
+
+        self.audio_output_combo["values"] = labels
+        self.audio_output_var.set(selected_label)
+
+    def _on_audio_output_selected(self, event=None):
+        label = self.audio_output_var.get()
+        output_device = self.audio_output_by_label.get(label, "")
+
+        ok, error = self.tts_manager.set_audio_output_device(output_device)
+
+        if not ok:
+            messagebox.showerror(
+                "Saida de audio",
+                f"Nao foi possivel alterar a saida de audio:\n\n{error}",
+                parent=self.root,
+            )
+            self._refresh_audio_outputs(show_error=False)
+            return
+
+        active_device = self.tts_manager.get_audio_output_device()
+        if active_device != output_device:
+            self._refresh_audio_outputs(show_error=False)
+
+    def _test_audio_output(self):
+        ok, error = self.tts_manager.play_audio_test()
+
+        if not ok:
+            messagebox.showerror(
+                "Teste de audio",
+                f"Nao foi possivel tocar o teste de audio:\n\n{error}",
+                parent=self.root,
+            )
 
     def confirm_twitch_disconnect(self) -> bool:
         return messagebox.askyesno(

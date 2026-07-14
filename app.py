@@ -228,6 +228,13 @@ def main():
             new_state["platforms"]["kick"]["enabled"] = bool(enabled)
             save_app_state(new_state)
 
+        def clear_platform_channel(platform_key: str):
+            new_state = get_app_state()
+            new_state.setdefault("platforms", {})
+            new_state["platforms"].setdefault(platform_key, {"enabled": False})
+            new_state["platforms"][platform_key]["channel_name"] = ""
+            save_app_state(new_state)
+
         def is_current_twitch_attempt(attempt_id: int, cancel_event: threading.Event) -> bool:
             return (not cancel_event.is_set()) and attempt_id == twitch_connect_attempt
 
@@ -428,6 +435,40 @@ def main():
 
         def on_toggle_youtube(action="new", display_index: int | None = None):
             nonlocal gui, youtube_connecting, youtube_connect_attempt, youtube_connect_cancel_event
+            if action == "forget_channel":
+                with youtube_connecting_lock:
+                    youtube_connect_attempt += 1
+                    youtube_connect_cancel_event.set()
+                    youtube_connect_cancel_event = threading.Event()
+                    youtube_connecting = False
+
+                if youtube_bot.is_public_mode():
+                    youtube_bot.stop()
+                clear_platform_channel("youtube")
+                set_youtube_disabled(False)
+                youtube_bot.refresh_idle_status()
+                return
+
+            if action == "forget_account":
+                with youtube_connecting_lock:
+                    youtube_connect_attempt += 1
+                    youtube_connect_cancel_event.set()
+                    youtube_connect_cancel_event = threading.Event()
+                    youtube_connecting = False
+
+                try:
+                    account_index = int(display_index or 0)
+                except (TypeError, ValueError):
+                    account_index = 0
+
+                if account_index <= 0 or not youtube_bot.remove_account_by_display_index(account_index):
+                    show_critical_error("Nao foi possivel esquecer a conta selecionada do YouTube.")
+                    return
+
+                set_youtube_disabled(False)
+                youtube_bot.refresh_idle_status()
+                return
+
             if action == "disable":
                 with youtube_connecting_lock:
                     youtube_connect_attempt += 1
@@ -495,6 +536,12 @@ def main():
             ).start()
 
         def on_toggle_kick(action="login", channel_name: str | None = None):
+            if action == "forget":
+                kick_bot.disconnect_and_forget()
+                clear_platform_channel("kick")
+                set_kick_enabled(False)
+                return
+
             if action == "stop" or kick_bot.is_running():
                 kick_bot.stop()
                 set_kick_enabled(False)
@@ -507,6 +554,17 @@ def main():
                 except Exception as exc:
                     kick_bot._status = "erro WebSocket Kick"
                     show_critical_error(f"Falha ao monitorar canal Kick:\n\n{exc}")
+                return
+
+            if not kick_bot.auth.is_configured():
+                set_kick_enabled(False)
+                show_critical_error(
+                    "OAuth da Kick nao esta configurado.\n\n"
+                    "Para entrar com conta Kick e permitir respostas no chat, preencha "
+                    "KICK_CLIENT_ID e KICK_CLIENT_SECRET no arquivo .env.\n\n"
+                    "Se quiser apenas testar a leitura do chat, use a opcao "
+                    "\"Monitorar por nome do canal\"."
+                )
                 return
 
             kick_bot.start(force_auth=True)
@@ -529,8 +587,8 @@ def main():
 
         auto_connect_twitch_if_cached()
 
-        if bool(app_state["platforms"].get("kick", {}).get("enabled", False)) and kick_bot.can_auto_start():
-            kick_bot.start(force_auth=False)
+        if bool(app_state["platforms"].get("kick", {}).get("enabled", False)):
+            set_kick_enabled(False)
 
         try:
             gui.run()

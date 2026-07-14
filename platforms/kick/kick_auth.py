@@ -316,6 +316,21 @@ class KickAuth:
         if isinstance(profile, dict):
             token_data = dict(token_data)
             token_data["profile"] = profile
+            username = (
+                profile.get("username")
+                or profile.get("slug")
+                or profile.get("channel_slug")
+                or profile.get("name")
+            )
+            user_id = profile.get("user_id") or profile.get("id")
+            profile_picture = profile.get("profile_picture") or profile.get("profilePicture")
+
+            if username and not token_data.get("username"):
+                token_data["username"] = str(username).strip()
+            if user_id and not token_data.get("user_id"):
+                token_data["user_id"] = str(user_id).strip()
+            if profile_picture and not token_data.get("profile_picture"):
+                token_data["profile_picture"] = str(profile_picture).strip()
         return token_data
 
     def _parse_scope_value(self, value: str) -> list[str]:

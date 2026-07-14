@@ -1,6 +1,6 @@
 import threading
 
-from config import KICK_CHANNEL, KICK_TOKEN_CACHE_FILE, KICK_WEBSOCKET_RECONNECT_SECONDS
+from config import KICK_TOKEN_CACHE_FILE, KICK_WEBSOCKET_RECONNECT_SECONDS
 from services.tts.tts_manager import TTSManager
 
 from .kick_auth import KickAuth
@@ -46,14 +46,10 @@ class KickBot:
         return self._running or self.pusher_client.is_running()
 
     def has_saved_auth(self) -> bool:
-        return bool(KICK_CHANNEL or self.auth.has_saved_auth())
-
-    def can_auto_start(self) -> bool:
-        return bool(KICK_CHANNEL)
+        return self.auth.has_saved_auth()
 
     def start(self, force_auth: bool = True, channel_slug: str | None = None):
-        _ = force_auth
-        channel = (channel_slug or "").strip().replace("@", "").lower()
+        channel = self._normalize_channel_slug(channel_slug)
         with self._lock:
             if self._running or (self._thread and self._thread.is_alive()):
                 return
@@ -73,7 +69,7 @@ class KickBot:
             self._thread.start()
 
     def start_public_channel(self, channel_slug: str):
-        channel = (channel_slug or "").strip().replace("@", "").lower()
+        channel = self._normalize_channel_slug(channel_slug)
         if not channel:
             raise ValueError("Informe o nome do canal Kick.")
 
@@ -116,19 +112,35 @@ class KickBot:
 
     def _run(self, cancel_event: threading.Event, force_auth: bool):
         try:
-            channel_slug = self._channel_override or KICK_CHANNEL
-            if not channel_slug:
-                self._status = "defina canal Kick"
-                print("[KICK BOT] Defina KICK_CHANNEL no .env para usar o WebSocket.")
-                return
-
+            channel_slug = self._channel_override
             if self._public_mode:
+                if not channel_slug:
+                    self._status = "defina canal Kick"
+                    print("[KICK BOT] Informe um canal Kick para monitorar sem login.")
+                    return
+
                 print("[KICK BOT] Monitoramento sem login; respostas no chat ficam desativadas.")
             else:
+                self._status = "aguardando OAuth Kick"
                 self._sender_authenticated = self._prepare_authenticated_sender(
                     force_auth=force_auth,
                     cancel_event=cancel_event,
                 )
+                if not self._sender_authenticated:
+                    self._status = "OAuth Kick necessario"
+                    print("[KICK BOT] Login Kick nao iniciado porque OAuth nao esta pronto.")
+                    return
+
+                channel_slug = self._normalize_channel_slug(
+                    channel_slug or self._get_authenticated_channel_slug()
+                )
+                if not channel_slug:
+                    self._status = "defina canal Kick"
+                    print(
+                        "[KICK BOT] OAuth concluido, mas nao foi possivel determinar o canal. "
+                        "Use monitoramento por nome do canal."
+                    )
+                    return
 
             self._status = "conectando WebSocket Kick"
             self.pusher_client.send_chat_callback = (
@@ -139,7 +151,7 @@ class KickBot:
                 return
 
             if self.pusher_client.wait_until_connected(timeout=10.0):
-                self._status = "monitorando Kick via WebSocket"
+                self._status = f"monitorando Kick @{channel_slug} via WebSocket"
             else:
                 self._status = self.pusher_client.get_status() or "conectando WebSocket Kick"
 
@@ -177,7 +189,7 @@ class KickBot:
 
         try:
             if force_auth:
-                self._token_data = self.auth.get_valid_token(cancel_event=cancel_event)
+                self._token_data = self.auth.run_browser_login(cancel_event=cancel_event)
             else:
                 self._token_data = self.auth.get_valid_cached_token()
 
@@ -216,7 +228,11 @@ class KickBot:
         if self.pusher_client.broadcaster_user_id:
             return self.pusher_client.broadcaster_user_id
 
-        channel_slug = self._channel_override or KICK_CHANNEL
+        channel_slug = (
+            self.pusher_client.channel_slug
+            or self._channel_override
+            or self._get_authenticated_channel_slug()
+        )
         if channel_slug:
             try:
                 channel = self.pusher_client.resolve_channel(channel_slug)
@@ -228,3 +244,26 @@ class KickBot:
                 print(f"[KICK BOT] Falha ao resolver broadcaster_user_id para envio: {exc}")
 
         return ""
+
+    def _get_authenticated_channel_slug(self) -> str:
+        token_data = self._token_data if isinstance(self._token_data, dict) else {}
+        profile = token_data.get("profile") if isinstance(token_data.get("profile"), dict) else {}
+
+        for value in (
+            token_data.get("username"),
+            token_data.get("slug"),
+            token_data.get("channel_slug"),
+            profile.get("username"),
+            profile.get("slug"),
+            profile.get("channel_slug"),
+            profile.get("name"),
+        ):
+            channel_slug = self._normalize_channel_slug(value)
+            if channel_slug:
+                return channel_slug
+
+        return ""
+
+    @staticmethod
+    def _normalize_channel_slug(value) -> str:
+        return str(value or "").strip().replace("@", "").lower()

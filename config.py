@@ -89,8 +89,7 @@ YOUTUBE_CONFIG_FILE = DATA_DIR / "youtube_config.json"
 YOUTUBE_MESSAGE_STORE_FILE = DATA_DIR / "youtube_messages.json"
 
 
-KICK_CHANNEL = os.getenv("KICK_CHANNEL", "").strip().replace("@", "").lower()
-KICK_WEBSOCKET_RECONNECT_SECONDS = _get_int_env("KICK_WEBSOCKET_RECONNECT_SECONDS", 5)
+KICK_WEBSOCKET_RECONNECT_SECONDS = 5
 KICK_CLIENT_ID = os.getenv("KICK_CLIENT_ID", "").strip()
 KICK_CLIENT_SECRET = os.getenv("KICK_CLIENT_SECRET", "").strip()
 KICK_REDIRECT_URI = os.getenv("KICK_REDIRECT_URI", "http://localhost:8791/callback").strip()

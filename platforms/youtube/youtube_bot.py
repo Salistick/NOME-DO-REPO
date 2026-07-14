@@ -71,6 +71,9 @@ class YouTubeBot:
     def is_running(self) -> bool:
         return self._running
 
+    def is_public_mode(self) -> bool:
+        return self._public_mode
+
     def has_saved_auth(self) -> bool:
         return bool(self.auth.list_cached_accounts())
 
@@ -281,11 +284,8 @@ class YouTubeBot:
         total = self.config_store.count_accounts()
 
         if total <= 0:
-            self._active_account_index = 0
-            self._active_account = None
-            self._active_channel = None
-            self._active_live = None
-            self._stop_chat_monitor()
+            self.stop()
+            self._monitoring_disabled = False
             self.refresh_idle_status()
             return True
 

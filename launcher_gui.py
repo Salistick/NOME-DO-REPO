@@ -548,9 +548,14 @@ class LauncherGUI:
         )
 
     def _open_kick_menu(self):
-        if self.kick_bot and self.kick_bot.is_running():
-            self.on_toggle_kick("stop")
-            return
+        running = self.kick_bot and self.kick_bot.is_running()
+        extra_actions = []
+
+        if running:
+            extra_actions.append(("Desligar monitoramento", lambda: self.on_toggle_kick("stop")))
+
+        if self._has_kick_saved_configuration():
+            extra_actions.append(("Esquecer conta/canal Kick", self._forget_kick_configuration))
 
         self._open_platform_start_menu(
             title="Kick",
@@ -559,6 +564,8 @@ class LauncherGUI:
             channel_prompt="Digite o nome do canal da Kick",
             platform_key="kick",
             callback=self.on_toggle_kick,
+            include_start_options=not running,
+            extra_actions=extra_actions,
         )
 
     def _open_platform_start_menu(
@@ -569,6 +576,8 @@ class LauncherGUI:
         channel_prompt: str,
         platform_key: str,
         callback,
+        include_start_options: bool = True,
+        extra_actions: list[tuple[str, object]] | None = None,
     ):
         if self.platform_menu_window is not None:
             try:
@@ -578,15 +587,19 @@ class LauncherGUI:
             except Exception:
                 self.platform_menu_window = None
 
+        extra_actions = extra_actions or []
+        action_count = (2 if include_start_options else 0) + len(extra_actions)
+        window_height = max(205, 150 + (action_count * 54))
+
         window = tk.Toplevel(self.root)
         window.title(title)
-        window.geometry("340x245")
+        window.geometry(f"340x{window_height}")
         window.resizable(False, False)
         window.configure(bg="#111111")
         window.transient(self.root)
         window.grab_set()
         self.platform_menu_window = window
-        self._center_child_window(window, self.root, width=340, height=245)
+        self._center_child_window(window, self.root, width=340, height=window_height)
 
         def close_window():
             try:
@@ -597,11 +610,9 @@ class LauncherGUI:
             window.destroy()
 
         def choose_login():
-            close_window()
             callback("login")
 
         def choose_channel():
-            close_window()
             self._ask_channel_name(
                 platform_key=platform_key,
                 title=title,
@@ -619,17 +630,26 @@ class LauncherGUI:
 
         tk.Label(
             window,
-            text="Escolha como deseja iniciar o monitoramento",
+            text=(
+                "Escolha como deseja iniciar o monitoramento"
+                if include_start_options
+                else "Escolha uma acao"
+            ),
             font=("Segoe UI", 10),
             fg="#BBBBBB",
             bg="#111111",
-        ).pack(pady=(0, 18))
+        ).pack(pady=(0, 18 if action_count else 8))
 
-        for label, command in ((login_label, choose_login), (channel_label, choose_channel)):
+        actions = []
+        if include_start_options:
+            actions.extend(((login_label, choose_login), (channel_label, choose_channel)))
+        actions.extend(extra_actions)
+
+        for label, command in actions:
             tk.Button(
                 window,
                 text=label,
-                command=command,
+                command=lambda command=command: [close_window(), command()],
                 font=("Segoe UI", 10, "bold"),
                 bg="#202020",
                 fg="#FFFFFF",
@@ -657,6 +677,25 @@ class LauncherGUI:
         ).pack(pady=(2, 0))
 
         window.protocol("WM_DELETE_WINDOW", close_window)
+
+    def _has_kick_saved_configuration(self) -> bool:
+        saved_channel = bool(self._get_saved_platform_channel("kick"))
+        saved_auth = False
+        try:
+            saved_auth = bool(self.kick_bot and self.kick_bot.has_saved_auth())
+        except Exception:
+            saved_auth = False
+        return saved_channel or saved_auth
+
+    def _forget_kick_configuration(self):
+        if not messagebox.askyesno(
+            "Esquecer Kick",
+            "Deseja esquecer a conta Kick e o canal digitado salvo?",
+            parent=self.root,
+        ):
+            return
+
+        self.on_toggle_kick("forget")
 
     def _ask_channel_name(self, platform_key: str, title: str, prompt: str, callback):
         default = self._get_saved_platform_channel(platform_key)
@@ -696,13 +735,13 @@ class LauncherGUI:
 
         window = tk.Toplevel(self.root)
         window.title("YouTube")
-        window.geometry("360x420")
+        window.geometry("420x540")
         window.resizable(False, False)
         window.configure(bg="#111111")
         window.transient(self.root)
         window.grab_set()
         self.youtube_menu_window = window
-        self._center_child_window(window, self.root, width=360, height=420)
+        self._center_child_window(window, self.root, width=420, height=540)
 
         def close_window():
             try:
@@ -758,6 +797,10 @@ class LauncherGUI:
                 callback=self.on_toggle_youtube,
             ),
         )
+
+        if self._get_saved_platform_channel("youtube"):
+            add_action_button("Esquecer canal digitado", self._forget_youtube_saved_channel)
+
         add_action_button("Desligar monitoramento", lambda: self.on_toggle_youtube("disable"))
 
         choices = self.youtube_bot.list_account_choices()
@@ -776,10 +819,44 @@ class LauncherGUI:
                 if choice.get("active"):
                     label = f"{label} [ativo]"
 
-                add_action_button(
-                    label,
-                    lambda display_index=choice["display_index"]: self.on_toggle_youtube("select", display_index),
-                )
+                row = tk.Frame(buttons_frame, bg="#111111")
+                row.pack(fill="x", pady=(0, 8))
+
+                tk.Button(
+                    row,
+                    text=f"Usar {label}",
+                    command=lambda display_index=choice["display_index"]: [
+                        close_window(),
+                        self.on_toggle_youtube("select", display_index),
+                    ],
+                    font=("Segoe UI", 9, "bold"),
+                    bg="#202020",
+                    fg="#FFFFFF",
+                    activebackground="#303030",
+                    activeforeground="#FFFFFF",
+                    relief="flat",
+                    padx=10,
+                    pady=9,
+                    cursor="hand2",
+                ).pack(side="left", fill="x", expand=True)
+
+                tk.Button(
+                    row,
+                    text="Esquecer",
+                    command=lambda display_index=choice["display_index"], label=choice["label"]: [
+                        close_window(),
+                        self._forget_youtube_account(display_index, label),
+                    ],
+                    font=("Segoe UI", 9, "bold"),
+                    bg="#3A2020",
+                    fg="#FFFFFF",
+                    activebackground="#4A2828",
+                    activeforeground="#FFFFFF",
+                    relief="flat",
+                    padx=10,
+                    pady=9,
+                    cursor="hand2",
+                ).pack(side="left", padx=(8, 0))
         else:
             tk.Label(
                 buttons_frame,
@@ -805,6 +882,26 @@ class LauncherGUI:
         ).pack(pady=(0, 18))
 
         window.protocol("WM_DELETE_WINDOW", close_window)
+
+    def _forget_youtube_saved_channel(self):
+        if not messagebox.askyesno(
+            "Esquecer canal YouTube",
+            "Deseja esquecer o canal digitado salvo do YouTube?",
+            parent=self.root,
+        ):
+            return
+
+        self.on_toggle_youtube("forget_channel")
+
+    def _forget_youtube_account(self, display_index: int, label: str):
+        if not messagebox.askyesno(
+            "Esquecer conta YouTube",
+            f"Deseja esquecer esta conta/canal do YouTube?\n\n{label}",
+            parent=self.root,
+        ):
+            return
+
+        self.on_toggle_youtube("forget_account", display_index)
 
     def _schedule_refresh(self):
         twitch_status = self.twitch_bot.get_status()

@@ -68,7 +68,7 @@ class KickPusherClient:
             self.broadcaster_user_id = str(channel.get("broadcaster_user_id") or "").strip()
             self._stop_event = threading.Event()
             self._connected_event = threading.Event()
-            self._status = "conectando WebSocket Kick"
+            self._status = self._format_status("conectando WebSocket Kick")
             self._last_error = ""
             self._last_frame_at = 0.0
             self._activity_timeout_seconds = 60.0
@@ -119,7 +119,7 @@ class KickPusherClient:
     def resolve_channel(self, channel_slug: str) -> dict[str, Any]:
         slug = self._normalize_slug(channel_slug)
         if not slug:
-            raise RuntimeError("Defina KICK_CHANNEL no arquivo .env para usar WebSocket.")
+            raise RuntimeError("Informe o canal Kick para usar WebSocket.")
 
         last_error = None
         for candidate in self._slug_candidates(slug):
@@ -183,7 +183,7 @@ class KickPusherClient:
             f"{PUSHER_WS_BASE}/app/{PUSHER_KEY}"
             f"?protocol=7&client=js&version={PUSHER_CLIENT_VERSION}&flash=false"
         )
-        self._status = "conectando WebSocket Kick"
+        self._status = self._format_status("conectando WebSocket Kick")
         self._connected_event.clear()
         ws = websocket.create_connection(
             url,
@@ -260,13 +260,13 @@ class KickPusherClient:
                 except Exception:
                     self._activity_timeout_seconds = 60.0
 
-            self._status = "WebSocket Kick conectado"
+            self._status = self._format_status("WebSocket Kick conectado")
             self._connected_event.set()
             self._subscribe_channels()
             return
 
         if event_name == "pusher_internal:subscription_succeeded":
-            self._status = "monitorando Kick via WebSocket"
+            self._status = self._format_status("monitorando Kick via WebSocket")
             print(f"[KICK WS] Assinado: {payload.get('channel')}")
             return
 
@@ -326,6 +326,11 @@ class KickPusherClient:
             10.0,
             min(PUSHER_MAX_PING_INTERVAL_SECONDS, self._activity_timeout_seconds - 5.0),
         )
+
+    def _format_status(self, status: str) -> str:
+        if self.channel_slug:
+            return f"{status} @{self.channel_slug}"
+        return status
 
     def _fetch_channel(self, slug: str) -> dict[str, Any]:
         response = requests.get(

@@ -1,0 +1,30 @@
+.env
+
+# Ambiente local
+.venv/
+.vscode/
+*.code-workspace
+docs/
+
+# Dados de runtime
+data/
+*.log
+
+# Caches Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build/artefatos gerados
+build/
+dist/
+build_assets/
+TTSLive.exe
+TTSLiveInstaller.exe
+
+# Arquivos de sistema
+Thumbs.db
+.DS_Store

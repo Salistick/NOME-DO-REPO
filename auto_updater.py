@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import subprocess
@@ -20,6 +21,8 @@ INSTALL_DIR_NAME = "TTSLive"
 UPDATE_DIR_NAME = "TTSLiveUpdater"
 SKIP_UPDATE_VERSIONS = {"", "dev", "manual"}
 PYINSTALLER_RESET_ENV_NAME = "PYINSTALLER_RESET_ENVIRONMENT"
+UPDATE_LOG_RELATIVE_PATH = Path("data") / "logs" / "updater.log"
+INSTALLER_WAIT_SECONDS = 15
 
 
 def _is_supported_runtime() -> bool:
@@ -81,6 +84,10 @@ def _get_expected_installed_exe_path(current_exe: Path) -> Path:
     return current_exe
 
 
+def _get_update_log_path(installed_exe: Path) -> Path:
+    return installed_exe.resolve().parent / UPDATE_LOG_RELATIVE_PATH
+
+
 def _write_update_script(
     installer_path: Path,
     current_exe: Path,
@@ -88,38 +95,77 @@ def _write_update_script(
     current_pid: int,
 ) -> Path:
     script_path = installer_path.with_suffix(".cmd")
+    update_log_path = _get_update_log_path(installed_exe)
+    installer_log_path = update_log_path.with_name("installer.log")
 
     script = f"""@echo off
 setlocal
 set "CURRENT_EXE={current_exe}"
 set "INSTALLED_EXE={installed_exe}"
+set "LOG_FILE={update_log_path}"
+set "INSTALLER_LOG={installer_log_path}"
+set "LOG_DIR={update_log_path.parent}"
 set "{PYINSTALLER_RESET_ENV_NAME}=1"
 set "_MEIPASS2="
 for /f "delims==" %%V in ('set _PYI_ 2^>NUL') do set "%%V="
 
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >NUL 2>NUL
+call :log "Updater iniciado. PID antigo: {current_pid}. Instalador: {installer_path}"
+
+set "WAIT_COUNT=0"
 :wait_for_old_process
 tasklist /FI "PID eq {current_pid}" 2>NUL | find "{current_pid}" >NUL
 if %ERRORLEVEL%==0 (
+    if "%WAIT_COUNT%"=="{INSTALLER_WAIT_SECONDS}" (
+        call :log "PID {current_pid} ainda ativo apos {INSTALLER_WAIT_SECONDS}s. Encerrando processo."
+        taskkill /PID {current_pid} /F >NUL 2>NUL
+        timeout /t 1 /nobreak >NUL
+        goto wait_for_old_process
+    )
     timeout /t 1 /nobreak >NUL
+    set /a WAIT_COUNT+=1
     goto wait_for_old_process
 )
 
-"{installer_path}" /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+tasklist /FI "IMAGENAME eq {INSTALLED_EXE_NAME}" 2>NUL | find /I "{INSTALLED_EXE_NAME}" >NUL
+if %ERRORLEVEL%==0 (
+    call :log "Instancias antigas de {INSTALLED_EXE_NAME} encontradas. Encerrando antes da instalacao."
+    taskkill /IM "{INSTALLED_EXE_NAME}" /F >NUL 2>NUL
+    timeout /t 1 /nobreak >NUL
+)
+
+call :log "Executando instalador silencioso."
+"{installer_path}" /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NORESTARTAPPLICATIONS /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS /LOG="%INSTALLER_LOG%"
 set "INSTALL_EXIT=%ERRORLEVEL%"
+call :log "Instalador finalizado com codigo %INSTALL_EXIT%."
 
 if "%INSTALL_EXIT%"=="0" (
     del /f /q "{installer_path}" >NUL 2>NUL
     timeout /t 2 /nobreak >NUL
 
     if exist "%INSTALLED_EXE%" (
+        call :log "Atualizacao concluida. Abrindo executavel instalado."
         start "" "%INSTALLED_EXE%"
     ) else if exist "%CURRENT_EXE%" (
+        call :log "Atualizacao concluida, mas executavel instalado nao foi encontrado. Abrindo executavel atual."
+        start "" "%CURRENT_EXE%"
+    )
+) else (
+    call :log "Falha na instalacao. Instalador preservado para diagnostico."
+    if exist "%CURRENT_EXE%" (
+        call :log "Reabrindo executavel atual apos falha."
         start "" "%CURRENT_EXE%"
     )
 )
 
-endlocal
+set "SCRIPT_EXIT=%INSTALL_EXIT%"
+call :log "Updater encerrado."
 del /f /q "%~f0" >NUL 2>NUL
+endlocal & exit /b %SCRIPT_EXIT%
+
+:log
+echo [%DATE% %TIME%] %~1>>"%LOG_FILE%"
+exit /b 0
 """
 
     script_path.write_text(script, encoding="utf-8")
@@ -160,7 +206,7 @@ def _launch_update_script(script_path: Path) -> None:
 
     _reset_windows_dll_directory()
     subprocess.Popen(
-        ["cmd.exe", "/c", str(script_path)],
+        ["cmd.exe", "/d", "/c", str(script_path)],
         close_fds=True,
         creationflags=creationflags,
         env=_sanitize_pyinstaller_environment(),
@@ -220,8 +266,16 @@ def try_start_auto_update(notify: Callable[[str], None] | None = None) -> bool:
         current_exe = Path(sys.executable).resolve()
         installed_exe = _get_expected_installed_exe_path(current_exe)
         script_path = _write_update_script(installer_path, current_exe, installed_exe, os.getpid())
+        logging.info(
+            "[UPDATER] Iniciando atualizacao %s | installer=%s | script=%s | log=%s",
+            latest_tag,
+            installer_path,
+            script_path,
+            _get_update_log_path(installed_exe),
+        )
         _launch_update_script(script_path)
         return True
     except Exception as exc:
+        logging.exception("[UPDATER] Falha ao iniciar a atualizacao automatica")
         print(f"[UPDATER] Falha ao iniciar a atualizacao automatica: {exc}")
         return False

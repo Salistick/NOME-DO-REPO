@@ -174,19 +174,9 @@ class TwitchBot:
                 print("[TWITCH BOT] Canal monitorado indisponivel. Mensagem nao enviada.")
                 return False
 
-            if self.client and not self._public_mode:
-                try:
-                    self.client.send_chat_message(clean)
-                    return True
-                except Exception as exc:
-                    print(f"[TWITCH BOT] Falha enviando pela sessao atual: {exc}")
-
             if not has_twitch_bot_sender_config():
                 print("[TWITCH BOT] Conta bot da Twitch nao configurada no .env.")
                 return False
-
-            if self._public_mode:
-                print("[TWITCH BOT] Enviando resposta pela conta bot configurada no .env.")
 
             self.sender.send_message(channel, clean)
             return True
@@ -378,16 +368,13 @@ class TwitchBot:
             print(f"[TWITCH BOT] Erro no callback de mensagem: {exc}")
 
     def _announce_chat_connection(self, channel: str):
-        if not self.client:
-            return
-
         message = "TTS Live conectado ao chat."
 
         for attempt in range(2):
             try:
                 if attempt:
                     time.sleep(1.0)
-                self.client.send_chat_message(message)
+                self.send_chat_message(message)
                 print(f"[TWITCH BOT] Mensagem de conexao enviada em #{channel}.")
                 return
             except Exception as exc:

@@ -567,7 +567,7 @@ def main():
                 )
                 return
 
-            kick_bot.start(force_auth=True)
+            kick_bot.start(force_auth=not kick_bot.has_saved_auth())
             set_kick_enabled(True)
 
         startup_window.set_message("Abrindo interface...")

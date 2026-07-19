@@ -266,7 +266,7 @@ class KickPusherClient:
             return
 
         if event_name == "pusher_internal:subscription_succeeded":
-            self._status = self._format_status("monitorando Kick via WebSocket")
+            self._status = self._format_monitoring_status()
             print(f"[KICK WS] Assinado: {payload.get('channel')}")
             return
 
@@ -331,6 +331,11 @@ class KickPusherClient:
         if self.channel_slug:
             return f"{status} @{self.channel_slug}"
         return status
+
+    def _format_monitoring_status(self) -> str:
+        if self.channel_slug:
+            return f"monitorando @{self.channel_slug}"
+        return "monitorando"
 
     def _fetch_channel(self, slug: str) -> dict[str, Any]:
         response = requests.get(

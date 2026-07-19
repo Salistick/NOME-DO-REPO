@@ -151,12 +151,12 @@ class KickBot:
                 return
 
             if self.pusher_client.wait_until_connected(timeout=10.0):
-                self._status = f"monitorando Kick @{channel_slug} via WebSocket"
+                self._status = f"monitorando @{channel_slug}"
             else:
                 self._status = self.pusher_client.get_status() or "conectando WebSocket Kick"
 
             suffix = " sem login" if self._public_mode else ""
-            print(f"[KICK BOT] Monitorando Kick via WebSocket{suffix}: @{channel_slug}")
+            print(f"[KICK BOT] monitorando @{channel_slug}{suffix}")
         except Exception as exc:
             self._status = "erro WebSocket Kick"
             print(f"[KICK BOT] Falha no WebSocket Kick: {exc}")
@@ -192,6 +192,9 @@ class KickBot:
                 self._token_data = self.auth.run_browser_login(cancel_event=cancel_event)
             else:
                 self._token_data = self.auth.get_valid_cached_token()
+                if not (self._token_data or {}).get("access_token") and self.auth.has_saved_auth():
+                    print("[KICK AUTH] Token salvo invalido. Abrindo OAuth Kick novamente.")
+                    self._token_data = self.auth.run_browser_login(cancel_event=cancel_event)
 
             if not (self._token_data or {}).get("access_token"):
                 print("[KICK BOT] Sessao Kick ausente; respostas no chat ficam desativadas.")

@@ -31,13 +31,13 @@ class StartupStatusWindow:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("TTS Live")
-        self.root.geometry("420x150")
+        self.root.geometry("460x175")
         self.root.resizable(False, False)
         self.root.configure(bg="#111111")
         self.root.attributes("-topmost", True)
 
         frame = tk.Frame(self.root, bg="#111111")
-        frame.pack(fill="both", expand=True, padx=24, pady=22)
+        frame.pack(fill="both", expand=True, padx=26, pady=22)
 
         tk.Label(
             frame,
@@ -63,7 +63,7 @@ class StartupStatusWindow:
             font=("Segoe UI", 11),
             fg="#D8D8D8",
             bg="#111111",
-            wraplength=360,
+            wraplength=400,
             justify="left",
         ).pack(anchor="w")
 
@@ -72,8 +72,8 @@ class StartupStatusWindow:
 
     def _center_window(self):
         self.root.update_idletasks()
-        width = self.root.winfo_width() or 420
-        height = self.root.winfo_height() or 150
+        width = self.root.winfo_width() or 460
+        height = self.root.winfo_height() or 175
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         pos_x = max(0, (screen_width - width) // 2)

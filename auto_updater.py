@@ -104,7 +104,7 @@ if %ERRORLEVEL%==0 (
     goto wait_for_old_process
 )
 
-start "" /wait "{installer_path}" /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
+"{installer_path}" /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 set "INSTALL_EXIT=%ERRORLEVEL%"
 
 if "%INSTALL_EXIT%"=="0" (
@@ -118,8 +118,8 @@ if "%INSTALL_EXIT%"=="0" (
     )
 )
 
-start "" cmd /c del /f /q "%~f0" >NUL 2>NUL
 endlocal
+del /f /q "%~f0" >NUL 2>NUL
 """
 
     script_path.write_text(script, encoding="utf-8")
@@ -152,12 +152,22 @@ def _reset_windows_dll_directory() -> None:
 
 def _launch_update_script(script_path: Path) -> None:
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    startupinfo = None
+    if sys.platform == "win32":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
+
     _reset_windows_dll_directory()
     subprocess.Popen(
         ["cmd.exe", "/c", str(script_path)],
         close_fds=True,
         creationflags=creationflags,
         env=_sanitize_pyinstaller_environment(),
+        startupinfo=startupinfo,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
 

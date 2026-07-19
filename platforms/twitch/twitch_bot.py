@@ -368,7 +368,7 @@ class TwitchBot:
             print(f"[TWITCH BOT] Erro no callback de mensagem: {exc}")
 
     def _announce_chat_connection(self, channel: str):
-        message = "TTS Live conectado ao chat."
+        message = "Mensagem de voz conectado ao chat"
 
         for attempt in range(2):
             try:

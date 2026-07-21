@@ -12,6 +12,7 @@ from config import (
     POLLY_OUTPUT_FORMAT,
     POLLY_SAMPLE_RATE,
 )
+from services.tts.text_sanitizer import build_polly_ssml
 
 
 class PollyClient:
@@ -32,11 +33,16 @@ class PollyClient:
         Gera um arquivo de áudio usando Polly e retorna o caminho.
         """
 
+        ssml_text = build_polly_ssml(text)
+        if not ssml_text:
+            raise RuntimeError("Texto vazio para sintetizar.")
+
         filename = f"{uuid.uuid4()}.{POLLY_OUTPUT_FORMAT}"
         output_path = self.audio_dir / filename
 
         response = self.client.synthesize_speech(
-            Text=text,
+            Text=ssml_text,
+            TextType="ssml",
             VoiceId=POLLY_VOICE_ID,
             Engine=POLLY_ENGINE,
             OutputFormat=POLLY_OUTPUT_FORMAT,

@@ -50,6 +50,7 @@ TTS_AUDIO_DIR = DATA_DIR / "tts_audio"
 TTS_AUDIO_DIR.mkdir(exist_ok=True)
 
 TTS_CONFIG_FILE = DATA_DIR / "tts_config.json"
+TTS_PRONUNCIATION_FILE = DATA_DIR / "tts_pronunciations.json"
 
 
 TOKEN_CACHE_FILE = DATA_DIR / "twitch_token.json"

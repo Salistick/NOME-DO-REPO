@@ -1,5 +1,9 @@
+import html
+import os
 import re
 import unicodedata
+
+from services.tts.pronunciation_rules import load_pronunciation_rules
 
 
 URL_PATTERN = re.compile(
@@ -8,26 +12,66 @@ URL_PATTERN = re.compile(
 )
 
 MULTISPACE_PATTERN = re.compile(r"\s+")
-REPEATED_PUNCT_PATTERN = re.compile(r"([!?.,:;])\1{1,}")
+REPEATED_PUNCT_PATTERN = re.compile(r"([!?,:;])\1{1,}")
 REPEATED_CHAR_PATTERN = re.compile(r"(.)\1{4,}", re.IGNORECASE)
 MENTION_PATTERN = re.compile(r"(?<!\S)@\w+")
 COMMAND_PREFIX_PATTERN = re.compile(r"^!\w+\s*", re.IGNORECASE)
 NUMBER_SYMBOLS_PATTERN = re.compile(r"[_~^`|\\]+")
 WORD_PATTERN = re.compile(r"\S+")
-GAMER_NUMBER_PATTERN = re.compile(r"\b(\d+(?:[.,]\d+)?)([kKmMbBtT]+)\b")
+COMPACT_MAGNITUDE_PATTERN = re.compile(r"\b(\d+(?:[.,]\d+)?)(k{1,3}|b|t)\b", re.IGNORECASE)
 ATTACHED_STAT_PATTERN = re.compile(
     r"\b(\d+(?:[.,]\d+)?)(hp|mp|sp|ml|lvl|lv|fps|hz|ms|cd)\b",
     re.IGNORECASE,
 )
 ORDINAL_NUMBER_PATTERN = re.compile(r"\b(\d+)(?:°|º)(?=\s|$)")
 PLAIN_NUMBER_PATTERN = re.compile(r"\b\d+\b")
+ELLIPSIS_CHAR = "\u2026"
+ELLIPSIS_PATTERN = re.compile(r"\.{3,}|\u2026")
+TIME_DURATION_PATTERN = re.compile(r"\b(\d+(?:[.,]\d+)?)([sSmMhH])\b")
+MONEY_PATTERN = re.compile(r"(?<!\w)(?:R\$|rs\$?)\s*(\d+(?:[.,]\d{1,2})?)", re.IGNORECASE)
+PERCENT_PATTERN = re.compile(r"\b(\d+(?:[.,]\d+)?)\s*%")
+SCORE_PATTERN = re.compile(r"\b(\d+)\s*x\s*(\d+)\b", re.IGNORECASE)
+FRACTION_PATTERN = re.compile(r"\b(\d+)\s*/\s*(\d+)\b")
+MULTIPLIER_PATTERN = re.compile(r"\b(\d+(?:[.,]\d+)?)x\b", re.IGNORECASE)
+CAPS_WORD_PATTERN = re.compile(r"\b[A-ZÁÉÍÓÚÀÂÊÔÃÕÇ]{4,}\b")
+SSML_BREAK_TIMES_BY_PUNCTUATION = {
+    ",": 180,
+    ";": 280,
+    ":": 260,
+    ".": 450,
+    "!": 520,
+    "?": 520,
+    ELLIPSIS_CHAR: 700,
+}
+SSML_SILENT_PUNCTUATION = set("()[]{}\"'`´“”‘’+-/$\\|_~^")
+SPEAKABLE_SYMBOLS = set("!?.,:;+-/%$()[]'\"") | {ELLIPSIS_CHAR}
 
 EMOJI_LIKE_PATTERN = re.compile(
     r"(:\)|:-\)|:\(|:-\(|:D|xD|XD|<3|:\*|;\)|;-?\)|:P|:-?P)",
     re.IGNORECASE,
 )
+INTENT_EMOJI_REPLACEMENTS = {
+    "😂": "risos",
+    "🤣": "risos",
+    "😆": "risos",
+    "😅": "risos",
+    "😭": "chorando",
+    "😢": "chorando",
+    "❤️": "coracao",
+    "❤": "coracao",
+    "💜": "coracao",
+    "💙": "coracao",
+    "💚": "coracao",
+    "💛": "coracao",
+    "🧡": "coracao",
+    "👏": "palmas",
+    "🔥": "fogo",
+    "👍": "positivo",
+    "👎": "negativo",
+}
+VARIATION_SELECTOR = "\ufe0f"
 
-NON_SPEAKABLE_PATTERN = re.compile(r"[^\w\s!?.,:;+\-/%()'\"\[\]A-Za-z0-9\u00C0-\u00FF]")
+NON_SPEAKABLE_PATTERN = re.compile(r"[^\w\s!?.,:;\u2026+\-/%$()'\"\[\]A-Za-z0-9\u00C0-\u00FF]")
 
 COMMON_REPLACEMENTS = {
     "vc": "voce",
@@ -211,7 +255,7 @@ def remove_emojis_and_symbols(text: str) -> str:
     for ch in text:
         category = unicodedata.category(ch)
 
-        if ch.isalnum() or ch.isspace() or ch in "!?.,:;+-/%()[]'\"":
+        if ch.isalnum() or ch.isspace() or ch in SPEAKABLE_SYMBOLS:
             cleaned.append(ch)
             continue
 
@@ -222,13 +266,48 @@ def remove_emojis_and_symbols(text: str) -> str:
     return "".join(cleaned)
 
 
+def replace_intent_emojis(text: str) -> str:
+    if not text:
+        return text
+
+    result: list[str] = []
+    last_replacement = ""
+    repeated_count = 0
+
+    for ch in text:
+        if ch == VARIATION_SELECTOR:
+            continue
+
+        replacement = INTENT_EMOJI_REPLACEMENTS.get(ch)
+        if not replacement:
+            result.append(ch)
+            last_replacement = ""
+            repeated_count = 0
+            continue
+
+        if replacement == last_replacement:
+            repeated_count += 1
+        else:
+            last_replacement = replacement
+            repeated_count = 1
+
+        if repeated_count <= 2:
+            result.append(f" {replacement} ")
+
+    return "".join(result)
+
+
+def collapse_intent_words(text: str) -> str:
+    intent_words = set(INTENT_EMOJI_REPLACEMENTS.values()) | {"risos"}
+    for word in sorted(intent_words):
+        text = re.sub(rf"\b{re.escape(word)}(?:\s+{re.escape(word)})+\b", word, text, flags=re.IGNORECASE)
+    return text
+
+
 def replace_multiword_gamer_terms(text: str) -> str:
     result = text
 
-    multi_map = {
-        "mini boss": "mini boss",
-        "poke x games": "poke x games",
-    }
+    multi_map = load_pronunciation_rules().get("phrases", {})
 
     for source, target in multi_map.items():
         result = re.sub(rf"\b{re.escape(source)}\b", target, result, flags=re.IGNORECASE)
@@ -244,6 +323,22 @@ def collapse_stretched_words(text: str) -> str:
     return re.sub(r"([A-Za-z\u00C0-\u00FF])\1{2,}", lambda m: m.group(1) * 2, text)
 
 
+def normalize_caps_lock(text: str) -> str:
+    def repl(match: re.Match) -> str:
+        word = match.group(0)
+        if len(word) <= 4:
+            return word
+        return f"{word.lower()}!"
+
+    return CAPS_WORD_PATTERN.sub(repl, text)
+
+
+def spell_uppercase_token(token: str) -> str:
+    if not token or not token.isupper() or len(token) > 4:
+        return token
+    return " ".join(token.lower())
+
+
 def _replace_word_preserving_punctuation(word: str) -> str:
     match = re.match(r"^([^\w\u00C0-\u00FF]*)([\w\u00C0-\u00FF]+)([^\w\u00C0-\u00FF]*)$", word, flags=re.UNICODE)
     if not match:
@@ -251,9 +346,12 @@ def _replace_word_preserving_punctuation(word: str) -> str:
 
     prefix, core, suffix = match.groups()
     compare_key = strip_accents_for_compare(core.lower())
+    word_rules = load_pronunciation_rules().get("single_words", {})
 
     replacement = None
-    if compare_key in COMMON_REPLACEMENTS:
+    if compare_key in word_rules:
+        replacement = word_rules[compare_key]
+    elif compare_key in COMMON_REPLACEMENTS:
         replacement = COMMON_REPLACEMENTS[compare_key]
     elif compare_key in GAMER_REPLACEMENTS:
         replacement = GAMER_REPLACEMENTS[compare_key]
@@ -280,6 +378,8 @@ def sanitize_username_for_tts(name: str) -> str:
 
     text = re.sub(r"([a-zA-Z\u00C0-\u00FF])(\d)", r"\1 \2", text)
     text = re.sub(r"(\d)([a-zA-Z\u00C0-\u00FF])", r"\1 \2", text)
+    text = convert_plain_numbers(text)
+    text = " ".join(spell_uppercase_token(token) for token in text.split())
 
     text = MULTISPACE_PATTERN.sub(" ", text).strip()
 
@@ -368,6 +468,24 @@ def _speak_decimal_number(number_part: str) -> str:
     return number_to_pt_br(int(normalized))
 
 
+def _is_singular_number(number_part: str) -> bool:
+    try:
+        return float(number_part.replace(",", ".")) == 1.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _speak_time_number(number_part: str, unit: str) -> str:
+    spoken = _speak_decimal_number(number_part)
+    if unit.lower() != "h":
+        return spoken
+
+    # "hora" pede feminino: uma hora, duas horas, vinte e uma horas.
+    spoken = re.sub(r"\bum$", "uma", spoken)
+    spoken = re.sub(r"\bdois$", "duas", spoken)
+    return spoken
+
+
 def ordinal_to_pt_br(n: int) -> str:
     if n <= 0:
         return number_to_pt_br(n)
@@ -404,13 +522,100 @@ def ordinal_to_pt_br(n: int) -> str:
     return number_to_pt_br(n)
 
 
-def convert_gamer_numbers(text: str) -> str:
-    def repl(match: re.Match) -> str:
-        spoken_number = _speak_decimal_number(match.group(1))
-        spoken_suffix = " ".join(ch.lower() for ch in match.group(2))
-        return f"{spoken_number} {spoken_suffix}"
+def convert_compact_magnitudes(text: str) -> str:
+    suffix_map = {
+        "k": ("mil", "mil"),
+        "kk": ("milhao", "milhoes"),
+        "kkk": ("bilhao", "bilhoes"),
+        "b": ("bilhao", "bilhoes"),
+        "t": ("trilhao", "trilhoes"),
+    }
 
-    return GAMER_NUMBER_PATTERN.sub(repl, text)
+    def repl(match: re.Match) -> str:
+        number_part = match.group(1)
+        suffix = match.group(2).lower()
+        if suffix == "k" and _is_singular_number(number_part):
+            return "mil"
+
+        spoken_number = _speak_decimal_number(match.group(1))
+        singular, plural = suffix_map.get(suffix, ("", ""))
+        spoken_suffix = singular if _is_singular_number(number_part) else plural
+        return f"{spoken_number} {spoken_suffix}".strip()
+
+    return COMPACT_MAGNITUDE_PATTERN.sub(repl, text)
+
+
+def convert_money_amounts(text: str) -> str:
+    def repl(match: re.Match) -> str:
+        raw_value = match.group(1).replace(",", ".")
+        try:
+            amount = round(float(raw_value), 2)
+        except ValueError:
+            return match.group(0)
+
+        reais = int(amount)
+        centavos = int(round((amount - reais) * 100))
+        parts: list[str] = []
+
+        if reais:
+            parts.append(f"{number_to_pt_br(reais)} {'real' if reais == 1 else 'reais'}")
+        if centavos:
+            parts.append(f"{number_to_pt_br(centavos)} {'centavo' if centavos == 1 else 'centavos'}")
+
+        if not parts:
+            return "zero reais"
+        return " e ".join(parts)
+
+    return MONEY_PATTERN.sub(repl, text)
+
+
+def convert_percentages(text: str) -> str:
+    def repl(match: re.Match) -> str:
+        return f"{_speak_decimal_number(match.group(1))} por cento"
+
+    return PERCENT_PATTERN.sub(repl, text)
+
+
+def convert_scores(text: str) -> str:
+    def repl(match: re.Match) -> str:
+        left = number_to_pt_br(int(match.group(1)))
+        right = number_to_pt_br(int(match.group(2)))
+        return f"{left} a {right}"
+
+    return SCORE_PATTERN.sub(repl, text)
+
+
+def convert_fractions(text: str) -> str:
+    common_denominators = {
+        2: ("meio", "meios"),
+        3: ("terco", "tercos"),
+        4: ("quarto", "quartos"),
+    }
+
+    def repl(match: re.Match) -> str:
+        numerator = int(match.group(1))
+        denominator = int(match.group(2))
+        if denominator == 0:
+            return match.group(0)
+
+        if numerator == 1 and denominator == 2:
+            return "meio"
+
+        denominator_words = common_denominators.get(denominator)
+        if denominator_words:
+            singular, plural = denominator_words
+            return f"{number_to_pt_br(numerator)} {singular if numerator == 1 else plural}"
+
+        return f"{number_to_pt_br(numerator)} sobre {number_to_pt_br(denominator)}"
+
+    return FRACTION_PATTERN.sub(repl, text)
+
+
+def convert_multipliers(text: str) -> str:
+    def repl(match: re.Match) -> str:
+        return f"{_speak_decimal_number(match.group(1))} vezes"
+
+    return MULTIPLIER_PATTERN.sub(repl, text)
 
 
 def convert_attached_stats(text: str) -> str:
@@ -434,6 +639,24 @@ def convert_attached_stats(text: str) -> str:
         return f"{spoken_number} {spoken_suffix}"
 
     return ATTACHED_STAT_PATTERN.sub(repl, text)
+
+
+def convert_time_durations(text: str) -> str:
+    unit_map = {
+        "s": ("segundo", "segundos"),
+        "m": ("minuto", "minutos"),
+        "h": ("hora", "horas"),
+    }
+
+    def repl(match: re.Match) -> str:
+        number_part = match.group(1)
+        unit = match.group(2).lower()
+        singular, plural = unit_map[unit]
+        spoken_number = _speak_time_number(number_part, unit)
+        spoken_unit = singular if _is_singular_number(number_part) else plural
+        return f"{spoken_number} {spoken_unit}"
+
+    return TIME_DURATION_PATTERN.sub(repl, text)
 
 
 def convert_ordinal_numbers(text: str) -> str:
@@ -505,6 +728,62 @@ def looks_like_spam(text: str) -> bool:
     return False
 
 
+def _tts_debug_enabled() -> bool:
+    return os.getenv("TTS_DEBUG_SANITIZER", "").strip().lower() in {"1", "true", "yes", "sim", "on"}
+
+
+def _debug_tts_preview(label: str, value: str) -> None:
+    if _tts_debug_enabled():
+        print(f"[TTS SANITIZER] {label}: {value}")
+
+
+def clean_chat_noise(text: str) -> str:
+    text = str(text or "").strip()
+    if not text:
+        return ""
+
+    text = URL_PATTERN.sub(" ", text)
+    text = MENTION_PATTERN.sub(" ", text)
+    text = COMMAND_PREFIX_PATTERN.sub("", text)
+    text = replace_intent_emojis(text)
+    text = EMOJI_LIKE_PATTERN.sub(" risos ", text)
+
+    text = remove_emojis_and_symbols(text)
+    text = NON_SPEAKABLE_PATTERN.sub(" ", text)
+
+    text = ELLIPSIS_PATTERN.sub(ELLIPSIS_CHAR, text)
+    text = REPEATED_PUNCT_PATTERN.sub(r"\1", text)
+    text = normalize_caps_lock(text)
+    text = normalize_laughs(text)
+    text = REPEATED_CHAR_PATTERN.sub(lambda m: m.group(1) * 2, text)
+    text = collapse_stretched_words(text)
+    text = collapse_intent_words(text)
+
+    return MULTISPACE_PATTERN.sub(" ", text).strip()
+
+
+def normalize_for_speech(text: str) -> str:
+    text = str(text or "").strip()
+    if not text:
+        return ""
+
+    text = convert_ordinal_numbers(text)
+    text = replace_multiword_gamer_terms(text)
+    text = convert_time_durations(text)
+    text = convert_money_amounts(text)
+    text = convert_percentages(text)
+    text = convert_scores(text)
+    text = convert_fractions(text)
+    text = convert_multipliers(text)
+    text = convert_attached_stats(text)
+    text = replace_common_terms(text)
+    text = convert_compact_magnitudes(text)
+    text = convert_plain_numbers(text)
+    text = collapse_intent_words(text)
+
+    return MULTISPACE_PATTERN.sub(" ", text).strip()
+
+
 def sanitize_chat_text(
     text: str,
     max_length: int = 220,
@@ -520,31 +799,13 @@ def sanitize_chat_text(
     if not text:
         return "", False
 
-    text = text.strip()
+    original_text = str(text)
+    text = clean_chat_noise(original_text)
+    _debug_tts_preview("original", original_text)
+    _debug_tts_preview("limpo", text)
 
-    text = URL_PATTERN.sub(" ", text)
-    text = MENTION_PATTERN.sub(" ", text)
-    text = COMMAND_PREFIX_PATTERN.sub("", text)
-    text = convert_ordinal_numbers(text)
-    text = EMOJI_LIKE_PATTERN.sub(" ", text)
-
-    text = remove_emojis_and_symbols(text)
-    text = NON_SPEAKABLE_PATTERN.sub(" ", text)
-
-    text = REPEATED_PUNCT_PATTERN.sub(r"\1", text)
-    text = normalize_laughs(text)
-    text = REPEATED_CHAR_PATTERN.sub(lambda m: m.group(1) * 2, text)
-    text = collapse_stretched_words(text)
-
-    text = MULTISPACE_PATTERN.sub(" ", text).strip()
-
-    text = replace_multiword_gamer_terms(text)
-    text = convert_attached_stats(text)
-    text = replace_common_terms(text)
-    text = convert_gamer_numbers(text)
-    text = convert_plain_numbers(text)
-
-    text = MULTISPACE_PATTERN.sub(" ", text).strip()
+    text = normalize_for_speech(text)
+    _debug_tts_preview("normalizado", text)
 
     if not text:
         return "", False
@@ -561,6 +822,75 @@ def sanitize_chat_text(
         return "", False
 
     return text, truncated
+
+
+def _append_ssml_break(parts: list[str], milliseconds: int) -> None:
+    if not parts:
+        return
+
+    break_tag = f'<break time="{milliseconds}ms"/>'
+    last = parts[-1]
+    if not last.startswith("<break"):
+        parts.append(break_tag)
+        return
+
+    match = re.search(r'time="(\d+)ms"', last)
+    previous_milliseconds = int(match.group(1)) if match else 0
+    if milliseconds > previous_milliseconds:
+        parts[-1] = break_tag
+
+
+def build_polly_ssml(text: str) -> str:
+    text = str(text or "").strip()
+    if not text:
+        return ""
+
+    parts: list[str] = []
+    buffer: list[str] = []
+    pending_break_ms = 0
+
+    def flush_buffer() -> None:
+        segment = MULTISPACE_PATTERN.sub(" ", "".join(buffer)).strip()
+        buffer.clear()
+        if segment:
+            parts.append(html.escape(segment, quote=False))
+
+    for ch in text:
+        break_time = SSML_BREAK_TIMES_BY_PUNCTUATION.get(ch)
+        if break_time is not None:
+            if buffer:
+                while buffer and buffer[-1].isspace():
+                    buffer.pop()
+                buffer.append(ch)
+            pending_break_ms = max(pending_break_ms, break_time)
+            continue
+
+        if pending_break_ms:
+            flush_buffer()
+            _append_ssml_break(parts, pending_break_ms)
+            pending_break_ms = 0
+
+        if ch in SSML_SILENT_PUNCTUATION or unicodedata.category(ch).startswith("P"):
+            buffer.append(" ")
+            continue
+
+        buffer.append(ch)
+
+    if pending_break_ms:
+        flush_buffer()
+        _append_ssml_break(parts, pending_break_ms)
+
+    flush_buffer()
+
+    while parts and parts[-1].startswith("<break"):
+        parts.pop()
+
+    if not parts:
+        return ""
+
+    ssml = f"<speak>{' '.join(parts)}</speak>"
+    _debug_tts_preview("ssml", ssml)
+    return ssml
 
 
 def build_tts_text(display_name: str, message_text: str, platform_name: str | None = None) -> str:

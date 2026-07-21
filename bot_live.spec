@@ -17,6 +17,10 @@ extra_datas = []
 if version_file.exists():
     extra_datas.append((str(version_file), "."))
 
+pronunciation_default_file = Path("assets") / "tts_pronunciations.default.json"
+if pronunciation_default_file.exists():
+    extra_datas.append((str(pronunciation_default_file), "assets"))
+
 
 a = Analysis(
     ["app.py"],

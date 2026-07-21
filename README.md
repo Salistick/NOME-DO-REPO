@@ -21,3 +21,11 @@ Estrutura basica:
 ```
 
 Para depurar o texto antes do Polly, defina `TTS_DEBUG_SANITIZER=1` no `.env`. O log mostrara texto original, texto limpo, texto normalizado e SSML final.
+
+## Configuracao por plataforma
+
+Os comandos `!len`, `!time`, `!modosub` e `!config` usam a plataforma de origem da mensagem.
+
+Exemplo: `!modosub` enviado na Twitch altera somente a Twitch. O mesmo comando enviado no YouTube altera somente o YouTube.
+
+O comando `!rate` e geral, pois existe uma unica fila de audio compartilhada entre as plataformas.

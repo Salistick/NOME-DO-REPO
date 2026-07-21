@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from config import TTS_AUDIO_DIR, TTS_CONFIG_FILE
 
-from services.tts.tts_state import TTSState
+from services.tts.tts_state import PlatformTTSConfig, TTSState, normalize_tts_platform
 from services.tts.tts_config_store import TTSConfigStore
 from services.tts.polly_client import PollyClient
 from services.tts.audio_player import AudioPlayer
@@ -214,6 +214,18 @@ class TTSManager:
     def _payload_bool(self, payload, key: str) -> bool:
         return payload_bool(payload, key)
 
+    def _platform_key(self, payload) -> str:
+        return normalize_tts_platform((payload or {}).get("platform", ""))
+
+    def _platform_config(self, payload) -> PlatformTTSConfig:
+        return self.state.get_platform_config(self._platform_key(payload))
+
+    def _platform_label(self, payload) -> str:
+        platform = self._platform_key(payload)
+        if platform in {"twitch", "youtube", "kick"}:
+            return platform
+        return platform or "desconhecida"
+
     def _reply(self, payload, text):
 
         send = payload.get("send_chat")
@@ -270,24 +282,26 @@ class TTSManager:
     # ==================================
 
     def _handle_ms(self, payload, message):
+        platform = self._platform_key(payload)
+        config = self._platform_config(payload)
 
         if self.state.stopped:
             return
 
-        if self.state.mode_sub_only and not self._can_use_sub_only(payload):
+        if config.mode_sub_only and not self._can_use_sub_only(payload):
             return
 
         username = payload.get("username")
         now = time.time()
 
-        ok, _remaining = self.state.can_user_send_audio(username, now)
+        ok, _remaining = self.state.can_user_send_audio(username, platform, now)
 
         if not ok:
             return
 
         text, _ = sanitize_chat_text(
             message,
-            max_words=self.state.max_words,
+            max_words=config.max_words,
         )
 
         if not text:
@@ -297,16 +311,18 @@ class TTSManager:
 
         self._queue_audio(tts_text, priority=False)
 
-        self.state.mark_user_audio_time(username, now)
+        self.state.mark_user_audio_time(username, platform, now)
 
     # ==================================
     # !mm
     # ==================================
 
     def _handle_mm(self, payload, message):
+        config = self._platform_config(payload)
+
         text, _ = sanitize_chat_text(
             message,
-            max_words=self.state.max_words,
+            max_words=config.max_words,
         )
 
         if not text:
@@ -314,7 +330,11 @@ class TTSManager:
 
         tts_text = build_tts_text(payload.get("display_name", "usuario"), text)
 
-        self._queue_audio(tts_text, priority=True, bypass_state=True)
+        self._queue_audio(
+            tts_text,
+            priority=True,
+            bypass_state=True,
+        )
 
     # ==================================
     # Comandos YouTube via Twitch
@@ -407,7 +427,7 @@ class TTSManager:
 
         self._save_config()
 
-        msg = f"Rate alterado para {value}s"
+        msg = f"Rate geral alterado para {value}s"
 
         print("[TTS]", msg)
 
@@ -419,11 +439,12 @@ class TTSManager:
             self._reply(payload, "Uso: !time 10")
             return
 
-        self.state.user_cooldown_seconds = value
+        config = self._platform_config(payload)
+        config.user_cooldown_seconds = value
 
         self._save_config()
 
-        msg = f"Cooldown entre usuarios alterado para {value}s"
+        msg = f"Cooldown {self._platform_label(payload)} alterado para {value}s"
 
         print("[TTS]", msg)
 
@@ -435,11 +456,12 @@ class TTSManager:
             self._reply(payload, "Uso: !len 20")
             return
 
-        self.state.max_words = value
+        config = self._platform_config(payload)
+        config.max_words = value
 
         self._save_config()
 
-        msg = f"Limite de palavras alterado para {value}"
+        msg = f"Limite de palavras {self._platform_label(payload)} alterado para {value}"
 
         print("[TTS]", msg)
 
@@ -494,26 +516,29 @@ class TTSManager:
         self._reply(payload, msg)
 
     def _handle_modosub(self, payload):
+        config = self._platform_config(payload)
 
-        self.state.mode_sub_only = not self.state.mode_sub_only
+        config.mode_sub_only = not config.mode_sub_only
 
         self._save_config()
 
-        status = "ON" if self.state.mode_sub_only else "OFF"
+        status = "ON" if config.mode_sub_only else "OFF"
 
-        msg = f"Modo sub agora {status}"
+        msg = f"Modo sub {self._platform_label(payload)} agora {status}"
 
         print("[TTS]", msg)
 
         self._reply(payload, msg)
 
     def _handle_config(self, payload):
+        config = self._platform_config(payload)
 
         msg = (
-            f"Config: modosub={self.state.mode_sub_only} | "
-            f"rate={self.state.rate_seconds}s | "
-            f"time={self.state.user_cooldown_seconds}s | "
-            f"len={self.state.max_words}"
+            f"Config {self._platform_label(payload)}: "
+            f"modosub={config.mode_sub_only} | "
+            f"rate_geral={self.state.rate_seconds}s | "
+            f"time={config.user_cooldown_seconds}s | "
+            f"len={config.max_words}"
         )
 
         print("[TTS CONFIG]", msg)
@@ -524,7 +549,12 @@ class TTSManager:
     # Fila de audio
     # ==================================
 
-    def _queue_audio(self, text, priority=False, bypass_state: bool = False):
+    def _queue_audio(
+        self,
+        text,
+        priority=False,
+        bypass_state: bool = False,
+    ):
         text = (text or "").strip()
         if not text:
             return

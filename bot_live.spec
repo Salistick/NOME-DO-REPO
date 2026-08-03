@@ -9,6 +9,7 @@ pygame_datas = collect_data_files("pygame")
 pygame_hiddenimports = collect_submodules("pygame")
 yt_dlp_hiddenimports = collect_submodules("yt_dlp")
 version_file = Path("build_assets") / "version.txt"
+version_info_file = Path("build_assets") / "version_info.txt"
 
 if not version_file.exists():
     version_file = Path("version.txt")
@@ -49,11 +50,12 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
+    version=str(version_info_file) if version_info_file.exists() else None,
     codesign_identity=None,
     entitlements_file=None,
 )

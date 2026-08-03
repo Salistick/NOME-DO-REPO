@@ -33,8 +33,9 @@ if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 if exist build_assets rmdir /s /q build_assets
 
-mkdir build_assets
-> build_assets\version.txt echo %BUILD_VERSION%
+set TTSLIVE_VERSION=%BUILD_VERSION%
+%PYTHON_EXE% build_scripts\prepare_windows_build_assets.py
+if errorlevel 1 exit /b 1
 
 echo Gerando executavel...
 %PYTHON_EXE% -m PyInstaller --clean bot_live.spec

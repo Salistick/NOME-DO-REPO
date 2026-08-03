@@ -1,17 +1,27 @@
 import threading
 import time
 from pathlib import Path
-from typing import Optional
 
 from services.tts.tts_manager import TTSManager
 
+from .youtube_api_chat_monitor import YouTubeApiChatMonitor
 from .youtube_auth import YouTubeAuth
+from .youtube_chat_monitor import YouTubeChatMonitor
+from .youtube_chat_sender import YouTubeChatSender
 from .youtube_config_store import YouTubeConfigStore
 from .youtube_live_resolver import YouTubeLiveResolver
 from .youtube_message_store import YouTubeMessageStore
-from .youtube_api_chat_monitor import YouTubeApiChatMonitor
-from .youtube_chat_sender import YouTubeChatSender
-from .youtube_chat_monitor import YouTubeChatMonitor
+
+YouTubeChatMonitorType = YouTubeApiChatMonitor | YouTubeChatMonitor
+
+YOUTUBE_BOT_RECOVERABLE_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+)
 
 
 class YouTubeBot:
@@ -33,7 +43,7 @@ class YouTubeBot:
         )
         self.sender = YouTubeChatSender(self._get_active_account_access_token)
 
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._running = False
         self._status = "desconectado"
         self._lock = threading.Lock()
@@ -43,13 +53,13 @@ class YouTubeBot:
         self._should_reconnect = False
 
         self._active_account_index = 0
-        self._active_account: Optional[dict] = None
-        self._active_channel: Optional[dict] = None
-        self._active_live: Optional[dict] = None
+        self._active_account: dict | None = None
+        self._active_channel: dict | None = None
+        self._active_live: dict | None = None
         self._public_mode = False
         self._public_channel_identifier = ""
 
-        self._chat_monitor: Optional[object] = None
+        self._chat_monitor: YouTubeChatMonitorType | None = None
 
         self._live_recheck_interval_seconds = 60.0
         self._no_live_retry_seconds = 60.0
@@ -91,10 +101,10 @@ class YouTubeBot:
 
         self._status = "desconectado"
 
-    def get_active_channel(self) -> Optional[dict]:
+    def get_active_channel(self) -> dict | None:
         return self._active_channel
 
-    def get_active_live(self) -> Optional[dict]:
+    def get_active_live(self) -> dict | None:
         return self._active_live
 
     def get_active_account_index(self) -> int:
@@ -172,14 +182,14 @@ class YouTubeBot:
         self._stop_chat_monitor()
         try:
             self.message_store.flush()
-        except Exception:
-            pass
+        except YOUTUBE_BOT_RECOVERABLE_ERRORS as exc:
+            print(f"[YOUTUBE BOT] erro ao salvar historico de mensagens: {exc}")
 
         try:
             if self._thread and self._thread.is_alive():
                 self._thread.join(timeout=5.0)
-        except Exception:
-            pass
+        except RuntimeError as exc:
+            print(f"[YOUTUBE BOT] erro ao aguardar thread: {exc}")
 
         self._thread = None
         self._active_account = None
@@ -211,12 +221,12 @@ class YouTubeBot:
     def shutdown(self):
         try:
             self.stop()
-        except Exception:
-            pass
+        except YOUTUBE_BOT_RECOVERABLE_ERRORS as exc:
+            print(f"[YOUTUBE BOT] erro ao finalizar monitor: {exc}")
         try:
             self.message_store.flush()
-        except Exception:
-            pass
+        except YOUTUBE_BOT_RECOVERABLE_ERRORS as exc:
+            print(f"[YOUTUBE BOT] erro ao salvar historico de mensagens: {exc}")
 
     # ==================================
     # Admin helpers
@@ -259,7 +269,7 @@ class YouTubeBot:
             if self._running and self._should_reconnect and not self._manual_stop:
                 try:
                     self._reconcile_live_state()
-                except Exception as exc:
+                except YOUTUBE_BOT_RECOVERABLE_ERRORS as exc:
                     print(f"[YOUTUBE BOT] Erro ao trocar imediatamente para live{display_index}: {exc}")
 
             return True
@@ -403,7 +413,7 @@ class YouTubeBot:
                 if self._manual_stop or not self._should_reconnect:
                     break
 
-            except Exception as exc:
+            except YOUTUBE_BOT_RECOVERABLE_ERRORS as exc:
                 if self._manual_stop or not self._should_reconnect:
                     break
 
@@ -608,7 +618,7 @@ class YouTubeBot:
                 f"(tentativa {self._chat_restart_attempts}/{self._max_chat_restart_attempts})."
             )
             return True
-        except Exception as exc:
+        except YOUTUBE_BOT_RECOVERABLE_ERRORS as exc:
             print(f"[YOUTUBE BOT] Falha ao reconectar chat localmente: {exc}")
             return False
 
@@ -623,14 +633,14 @@ class YouTubeBot:
                 account = self.auth.get_valid_account_by_account_id(account_id)
             else:
                 account = self.auth.get_valid_account_by_index(self._active_account_index)
-        except Exception as exc:
+        except YOUTUBE_BOT_RECOVERABLE_ERRORS as exc:
             print(f"[YOUTUBE BOT] Nao foi possivel renovar token da conta ativa: {exc}")
             return (self._active_account.get("access_token") or "").strip()
 
         self._active_account = account
         return (account.get("access_token") or "").strip()
 
-    def _create_chat_monitor_for_live(self, live_data: dict):
+    def _create_chat_monitor_for_live(self, live_data: dict) -> YouTubeChatMonitorType:
         live_chat_id = (live_data.get("live_chat_id") or "").strip()
         video_id = (live_data.get("video_id") or "").strip()
 
@@ -667,8 +677,8 @@ class YouTubeBot:
 
         try:
             monitor.stop()
-        except Exception:
-            pass
+        except YOUTUBE_BOT_RECOVERABLE_ERRORS as exc:
+            print(f"[YOUTUBE BOT] erro ao parar monitor de chat: {exc}")
 
     def _sleep_with_cancel(self, seconds: float):
         slept = 0.0

@@ -4,6 +4,8 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+LOGGER = logging.getLogger(__name__)
+
 
 class _NullStream(io.TextIOBase):
     def write(self, text):
@@ -107,5 +109,5 @@ def configure_logging(log_dir: Path) -> Path:
         _get_console_stream(sys.__stderr__, sys.stderr),
     )
 
-    logging.info("Logging inicializado em %s", log_file)
+    LOGGER.info("Logging inicializado em %s", log_file)
     return log_file

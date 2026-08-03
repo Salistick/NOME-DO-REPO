@@ -1,16 +1,25 @@
-import os
 import math
+import os
+import queue
 import threading
 import time
 import uuid
 import wave
 from pathlib import Path
-import queue
 
 if os.name == "nt":
     os.environ.setdefault("SDL_AUDIODRIVER", "directsound")
 
 import pygame
+
+AUDIO_PLAYER_RECOVERABLE_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    ImportError,
+    pygame.error,
+)
 
 
 class AudioPlayer:
@@ -44,12 +53,12 @@ class AudioPlayer:
     @staticmethod
     def list_output_devices() -> list[str]:
         try:
-            from pygame._sdl2 import INIT_AUDIO, init_subsystem
             import pygame._sdl2.audio as sdl_audio
+            from pygame._sdl2 import INIT_AUDIO, init_subsystem
 
             init_subsystem(INIT_AUDIO)
             names = sdl_audio.get_audio_device_names(False)
-        except Exception as exc:
+        except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
             print(f"[TTS] nao foi possivel listar saidas de audio: {exc}")
             return []
 
@@ -78,18 +87,18 @@ class AudioPlayer:
         with self._mixer_lock:
             try:
                 pygame.mixer.music.stop()
-            except Exception:
-                pass
+            except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
+                print(f"[TTS] falha ao parar mixer durante atualizacao: {exc}")
 
             try:
                 pygame.mixer.music.unload()
-            except Exception:
-                pass
+            except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
+                print(f"[TTS] falha ao descarregar mixer durante atualizacao: {exc}")
 
             try:
                 pygame.mixer.quit()
-            except Exception:
-                pass
+            except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
+                print(f"[TTS] falha ao reiniciar mixer durante atualizacao: {exc}")
 
             self._output_devices = self.list_output_devices()
 
@@ -117,18 +126,18 @@ class AudioPlayer:
         with self._mixer_lock:
             try:
                 pygame.mixer.music.stop()
-            except Exception:
-                pass
+            except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
+                print(f"[TTS] falha ao parar mixer: {exc}")
 
             try:
                 pygame.mixer.music.unload()
-            except Exception:
-                pass
+            except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
+                print(f"[TTS] falha ao descarregar mixer: {exc}")
 
             try:
                 pygame.mixer.quit()
-            except Exception:
-                pass
+            except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
+                print(f"[TTS] falha ao finalizar mixer: {exc}")
 
             try:
                 if output_device_name:
@@ -137,7 +146,7 @@ class AudioPlayer:
                     pygame.mixer.init()
                 self.output_device_name = output_device_name
                 return
-            except Exception as exc:
+            except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
                 if not output_device_name:
                     raise
 
@@ -191,8 +200,8 @@ class AudioPlayer:
         try:
             with self._mixer_lock:
                 pygame.mixer.music.stop()
-        except Exception:
-            pass
+        except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
+            print(f"[TTS] falha ao parar audio: {exc}")
 
     # ==========================
     # Loop principal
@@ -219,8 +228,8 @@ class AudioPlayer:
         try:
             with self._mixer_lock:
                 pygame.mixer.music.stop()
-        except Exception:
-            pass
+        except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
+            print(f"[TTS] falha ao finalizar player: {exc}")
 
     def _run(self):
 
@@ -246,15 +255,15 @@ class AudioPlayer:
                 while self._is_music_busy():
                     time.sleep(0.05)
 
-            except Exception as exc:
+            except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
                 print(f"[TTS] erro ao tocar audio: {exc}")
 
             finally:
                 try:
                     with self._mixer_lock:
                         pygame.mixer.music.unload()
-                except Exception:
-                    pass
+                except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
+                    print(f"[TTS] falha ao descarregar audio: {exc}")
                 self._safe_delete(audio_file)
 
             self._sleep_between_items()
@@ -296,7 +305,7 @@ class AudioPlayer:
         try:
             with self._mixer_lock:
                 return bool(pygame.mixer.music.get_busy())
-        except Exception:
+        except AUDIO_PLAYER_RECOVERABLE_ERRORS:
             return False
 
     def _write_test_tone(self, path: Path):
@@ -335,5 +344,5 @@ class AudioPlayer:
         for file in self.audio_dir.glob("*"):
             try:
                 file.unlink()
-            except Exception:
-                pass
+            except OSError as exc:
+                print(f"[TTS] nao foi possivel remover audio antigo {file}: {exc}")

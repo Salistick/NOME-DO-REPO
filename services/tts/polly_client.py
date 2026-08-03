@@ -1,17 +1,17 @@
 import uuid
 from pathlib import Path
 
-import boto3
+from botocore.exceptions import ClientError
 
 from config import (
-    AWS_REGION,
-    AWS_ACCESS_KEY_ID,
-    AWS_SECRET_ACCESS_KEY,
-    POLLY_VOICE_ID,
+    AWS_POLLY_CONFIG_FILE,
+    AWS_POLLY_SECRET_FILE,
     POLLY_ENGINE,
     POLLY_OUTPUT_FORMAT,
     POLLY_SAMPLE_RATE,
+    POLLY_VOICE_ID,
 )
+from services.tts.polly_credentials import PollyCredentialStore
 from services.tts.text_sanitizer import build_polly_ssml
 
 
@@ -21,12 +21,11 @@ class PollyClient:
         self.audio_dir = Path(audio_dir)
         self.audio_dir.mkdir(parents=True, exist_ok=True)
 
-        self.client = boto3.client(
-            "polly",
-            region_name=AWS_REGION,
-            aws_access_key_id=AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-        )
+        self.credential_store = PollyCredentialStore(AWS_POLLY_CONFIG_FILE, AWS_POLLY_SECRET_FILE)
+        self.client = self._create_client()
+
+    def _create_client(self):
+        return self.credential_store.create_client()
 
     def synthesize(self, text: str) -> Path:
         """
@@ -40,14 +39,13 @@ class PollyClient:
         filename = f"{uuid.uuid4()}.{POLLY_OUTPUT_FORMAT}"
         output_path = self.audio_dir / filename
 
-        response = self.client.synthesize_speech(
-            Text=ssml_text,
-            TextType="ssml",
-            VoiceId=POLLY_VOICE_ID,
-            Engine=POLLY_ENGINE,
-            OutputFormat=POLLY_OUTPUT_FORMAT,
-            SampleRate=POLLY_SAMPLE_RATE,
-        )
+        try:
+            response = self._synthesize_speech(ssml_text)
+        except ClientError as exc:
+            if not self._is_retriable_credential_error(exc):
+                raise
+            self.client = self._create_client()
+            response = self._synthesize_speech(ssml_text)
 
         audio_stream = response.get("AudioStream")
 
@@ -58,3 +56,23 @@ class PollyClient:
             f.write(audio_stream.read())
 
         return output_path
+
+    def _synthesize_speech(self, ssml_text: str):
+        return self.client.synthesize_speech(
+            Text=ssml_text,
+            TextType="ssml",
+            VoiceId=POLLY_VOICE_ID,
+            Engine=POLLY_ENGINE,
+            OutputFormat=POLLY_OUTPUT_FORMAT,
+            SampleRate=POLLY_SAMPLE_RATE,
+        )
+
+    @staticmethod
+    def _is_retriable_credential_error(exc: ClientError) -> bool:
+        code = exc.response.get("Error", {}).get("Code", "")
+        return code in {
+            "ExpiredToken",
+            "ExpiredTokenException",
+            "InvalidToken",
+            "UnrecognizedClientException",
+        }

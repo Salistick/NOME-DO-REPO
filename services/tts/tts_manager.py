@@ -1,21 +1,36 @@
-﻿import threading
-import time
+﻿from __future__ import annotations
+
 import queue
+import threading
+import time
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from config import TTS_AUDIO_DIR, TTS_CONFIG_FILE
-
-from services.tts.tts_state import PlatformTTSConfig, TTSState, normalize_tts_platform
-from services.tts.tts_config_store import TTSConfigStore
-from services.tts.polly_client import PollyClient
 from services.tts.audio_player import AudioPlayer
-from services.tts.text_sanitizer import sanitize_chat_text, build_tts_text
 from services.tts.command_rules import (
     can_use_sub_only,
     is_admin,
     normalized_role,
     payload_bool,
     resolve_command_type,
+)
+from services.tts.polly_client import PollyClient
+from services.tts.text_sanitizer import build_tts_text, sanitize_chat_text
+from services.tts.tts_config_store import TTSConfigStore
+from services.tts.tts_state import PlatformTTSConfig, TTSState, normalize_tts_platform
+
+if TYPE_CHECKING:
+    from platforms.youtube.youtube_bot import YouTubeBot
+
+
+TTS_RECOVERABLE_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
 )
 
 
@@ -38,6 +53,7 @@ class TTSManager:
         self.state = TTSState.from_persisted_dict(config_data)
 
         self.polly = PollyClient(TTS_AUDIO_DIR)
+        self._polly_lock = threading.Lock()
         self.player = AudioPlayer(
             TTS_AUDIO_DIR,
             rate_seconds=self.state.rate_seconds,
@@ -60,7 +76,7 @@ class TTSManager:
         )
 
         # sera injetado pelo app.py
-        self.youtube_bot = None
+        self.youtube_bot: YouTubeBot | None = None
 
         self.player.start()
         self._synth_thread.start()
@@ -94,7 +110,7 @@ class TTSManager:
 
         try:
             active_device = self.player.set_output_device(output_device_name)
-        except Exception as exc:
+        except TTS_RECOVERABLE_ERRORS as exc:
             return False, str(exc)
 
         self.state.audio_output_device = active_device
@@ -105,11 +121,15 @@ class TTSManager:
 
         return True, ""
 
+    def reload_polly_client(self) -> None:
+        with self._polly_lock:
+            self.polly = PollyClient(TTS_AUDIO_DIR)
+
     def play_audio_test(self) -> tuple[bool, str]:
         try:
             self.player.play_test_tone()
             return True, ""
-        except Exception as exc:
+        except TTS_RECOVERABLE_ERRORS as exc:
             return False, str(exc)
 
     # ==================================
@@ -233,7 +253,7 @@ class TTSManager:
         if send:
             try:
                 send(text)
-            except Exception as e:
+            except TTS_RECOVERABLE_ERRORS as e:
                 print("[TTS] erro enviando chat:", e)
 
     def _save_config(self):
@@ -583,19 +603,21 @@ class TTSManager:
                 continue
 
             try:
-                audio_path = self.polly.synthesize(task.text)
+                with self._polly_lock:
+                    polly = self.polly
+                audio_path = polly.synthesize(task.text)
                 self.player.enqueue(
                     audio_path,
                     priority=task.player_priority,
                     bypass_state=task.bypass_state,
                 )
-            except Exception as e:
+            except TTS_RECOVERABLE_ERRORS as e:
                 print("[TTS] erro gerando audio:", e)
             finally:
                 try:
                     self._synth_queue.task_done()
-                except Exception:
-                    pass
+                except ValueError as exc:
+                    print(f"[TTS] fila de audio com task_done invalido: {exc}")
 
     def _clear_pending_audio_queue(self):
         while True:
@@ -604,7 +626,8 @@ class TTSManager:
                 self._synth_queue.task_done()
             except queue.Empty:
                 break
-            except Exception:
+            except ValueError as exc:
+                print(f"[TTS] fila de audio com task_done invalido: {exc}")
                 break
 
     # ==================================

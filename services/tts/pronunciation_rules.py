@@ -5,7 +5,6 @@ from typing import Any
 
 from config import TTS_PRONUNCIATION_FILE
 
-
 DEFAULT_PRONUNCIATION_RULES = {
     "single_words": {
         "vc": "voce",
@@ -117,7 +116,7 @@ def _read_json_file(path: Path) -> dict[str, Any]:
                 data = json.load(handle)
                 if isinstance(data, dict):
                     return data
-    except Exception:
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return {}
     return {}
 
@@ -152,8 +151,8 @@ def _write_default_file(path: Path) -> None:
                 json.dumps(_load_default_rules(), ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-    except Exception:
-        pass
+    except OSError as exc:
+        print(f"[TTS] nao foi possivel criar arquivo de pronuncia padrao: {exc}")
 
 
 def load_pronunciation_rules(force_reload: bool = False) -> dict[str, dict[str, str]]:

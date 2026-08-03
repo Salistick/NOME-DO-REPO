@@ -4,7 +4,6 @@ from typing import Any
 
 from .kick_chat_event import KickChatEvent
 
-
 _KICK_EMOTE_RE = re.compile(r"\[emote:[^:\]\s]+:([^\]]+)\]")
 
 
@@ -193,10 +192,14 @@ def _collect_badges(*sources: dict[str, Any]) -> list[Any]:
     for source in sources:
         if not isinstance(source, dict):
             continue
-        identity = source.get("identity") if isinstance(source.get("identity"), dict) else {}
-        profile = source.get("profile") if isinstance(source.get("profile"), dict) else {}
-        membership = source.get("membership") if isinstance(source.get("membership"), dict) else {}
-        subscription = source.get("subscription") if isinstance(source.get("subscription"), dict) else {}
+        identity_value = source.get("identity")
+        profile_value = source.get("profile")
+        membership_value = source.get("membership")
+        subscription_value = source.get("subscription")
+        identity = identity_value if isinstance(identity_value, dict) else {}
+        profile = profile_value if isinstance(profile_value, dict) else {}
+        membership = membership_value if isinstance(membership_value, dict) else {}
+        subscription = subscription_value if isinstance(subscription_value, dict) else {}
         for current in (
             source.get("badges"),
             source.get("chatbadges"),
@@ -255,8 +258,10 @@ def _has_truthy_field(source: dict[str, Any], *keys: str) -> bool:
         if _truthy(source.get(key)):
             return True
 
-    identity = source.get("identity") if isinstance(source.get("identity"), dict) else {}
-    badge_info = identity.get("badge_info") if isinstance(identity.get("badge_info"), dict) else {}
+    identity_value = source.get("identity")
+    identity = identity_value if isinstance(identity_value, dict) else {}
+    badge_info_value = identity.get("badge_info")
+    badge_info = badge_info_value if isinstance(badge_info_value, dict) else {}
     for key in keys:
         if _truthy(badge_info.get(key)):
             return True

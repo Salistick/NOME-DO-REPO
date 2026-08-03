@@ -51,6 +51,8 @@ TTS_AUDIO_DIR.mkdir(exist_ok=True)
 
 TTS_CONFIG_FILE = DATA_DIR / "tts_config.json"
 TTS_PRONUNCIATION_FILE = DATA_DIR / "tts_pronunciations.json"
+AWS_POLLY_CONFIG_FILE = DATA_DIR / "aws_polly_config.json"
+AWS_POLLY_SECRET_FILE = DATA_DIR / "aws_polly_credentials.bin"
 
 
 TOKEN_CACHE_FILE = DATA_DIR / "twitch_token.json"
@@ -104,8 +106,6 @@ KICK_SCOPES = [
 
 
 AWS_REGION = os.getenv("AWS_REGION", "").strip()
-AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "").strip()
-AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "").strip()
 
 POLLY_VOICE_ID = os.getenv("POLLY_VOICE_ID", "Camila").strip()
 POLLY_ENGINE = os.getenv("POLLY_ENGINE", "neural").strip()
@@ -137,26 +137,7 @@ def has_twitch_bot_sender_config() -> bool:
 
 
 def validate_required_env_values() -> None:
-    if ENV_FILE_PATH is None:
-        raise RuntimeError(
-            "Arquivo .env nao encontrado. Coloque o .env na mesma pasta do TTSLive.exe."
-        )
-
-    missing = []
-
-    if not AWS_REGION:
-        missing.append("AWS_REGION")
-    if not AWS_ACCESS_KEY_ID:
-        missing.append("AWS_ACCESS_KEY_ID")
-    if not AWS_SECRET_ACCESS_KEY:
-        missing.append("AWS_SECRET_ACCESS_KEY")
-
-    if missing:
-        raise RuntimeError(
-            "Variaveis ausentes no .env: "
-            + ", ".join(missing)
-            + ". Coloque o arquivo .env na mesma pasta do TTSLive.exe."
-        )
+    return
 
 
 def build_env_help_message() -> str:
@@ -164,9 +145,9 @@ def build_env_help_message() -> str:
     env_path = get_expected_env_path()
 
     return (
-        "Nao foi possivel carregar corretamente o arquivo .env.\n\n"
+        "Configuracao local carregada:\n\n"
         f".env carregado: {loaded}\n\n"
-        "Local esperado:\n"
+        "Local esperado para credenciais de plataformas, quando usadas:\n"
         f"- {env_path}\n\n"
-        "Coloque o arquivo .env na mesma pasta do TTSLive.exe."
+        "As credenciais do Amazon Polly agora sao configuradas dentro do app."
     )

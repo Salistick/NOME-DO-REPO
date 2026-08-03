@@ -1,14 +1,26 @@
 import json
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Any, cast
 
 import requests
 
-
 YOUTUBE_LIVE_CHAT_STREAM_URL = "https://www.googleapis.com/youtube/v3/liveChat/messages/stream"
 YOUTUBE_LIVE_CHAT_LIST_URL = "https://www.googleapis.com/youtube/v3/liveChat/messages"
+YOUTUBE_API_CHAT_RECOVERABLE_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    requests.RequestException,
+)
+
+
+class YouTubeStreamFallbackError(RuntimeError):
+    pass
 
 
 class YouTubeApiChatMonitor:
@@ -29,7 +41,7 @@ class YouTubeApiChatMonitor:
         self.reconnect_delay_seconds = max(0.5, float(reconnect_delay_seconds))
         self.max_consecutive_failures = max(1, int(max_consecutive_failures))
 
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._running = False
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -64,8 +76,8 @@ class YouTubeApiChatMonitor:
         try:
             if self._thread and self._thread.is_alive():
                 self._thread.join(timeout=3.0)
-        except Exception:
-            pass
+        except RuntimeError as exc:
+            print(f"[YOUTUBE API CHAT] erro ao aguardar thread: {exc}")
 
         self._thread = None
 
@@ -89,14 +101,14 @@ class YouTubeApiChatMonitor:
                     consecutive_failures = 0
                     self._sleep_interruptible(self.reconnect_delay_seconds)
 
-                except Exception as exc:
+                except YOUTUBE_API_CHAT_RECOVERABLE_ERRORS as exc:
                     if not self._running or self._stop_event.is_set():
                         break
 
                     consecutive_failures += 1
                     print(f"[YOUTUBE API CHAT] Erro no monitor: {exc}")
 
-                    if getattr(exc, "stream_fallback", False):
+                    if isinstance(exc, YouTubeStreamFallbackError):
                         self._use_poll_fallback = True
                         consecutive_failures = 0
                         print("[YOUTUBE API CHAT] Stream indisponivel; usando listagem com intervalo oficial.")
@@ -129,9 +141,9 @@ class YouTubeApiChatMonitor:
         )
 
         if response.status_code in {400, 404, 405, 501}:
-            error = RuntimeError(f"streamList indisponivel: status {response.status_code}")
-            setattr(error, "stream_fallback", True)
-            raise error
+            raise YouTubeStreamFallbackError(
+                f"streamList indisponivel: status {response.status_code}"
+            )
 
         if response.status_code != 200:
             raise RuntimeError(f"YouTube streamList retornou status {response.status_code}: {response.text[:300]}")
@@ -142,6 +154,8 @@ class YouTubeApiChatMonitor:
                 break
             if not chunk:
                 continue
+            if isinstance(chunk, bytes):
+                chunk = chunk.decode("utf-8", errors="ignore")
             self._handle_stream_chunk(chunk)
 
     def _handle_stream_chunk(self, chunk: str):
@@ -215,19 +229,45 @@ class YouTubeApiChatMonitor:
                 continue
             self.on_message(parsed)
 
-    def _parse_item(self, item: dict) -> Optional[dict]:
+    def _parse_item(self, item: dict) -> dict | None:
         if not isinstance(item, dict):
             return None
 
-        snippet = item.get("snippet") if isinstance(item.get("snippet"), dict) else {}
-        author = item.get("authorDetails") if isinstance(item.get("authorDetails"), dict) else {}
+        snippet_value = item.get("snippet")
+        author_value = item.get("authorDetails")
+        snippet = snippet_value if isinstance(snippet_value, dict) else {}
+        author = author_value if isinstance(author_value, dict) else {}
+        text_message_details = cast(
+            dict[str, Any],
+            snippet.get("textMessageDetails")
+            if isinstance(snippet.get("textMessageDetails"), dict)
+            else {},
+        )
+        super_chat_details = cast(
+            dict[str, Any],
+            snippet.get("superChatDetails")
+            if isinstance(snippet.get("superChatDetails"), dict)
+            else {},
+        )
+        fan_funding_details = cast(
+            dict[str, Any],
+            snippet.get("fanFundingEventDetails")
+            if isinstance(snippet.get("fanFundingEventDetails"), dict)
+            else {},
+        )
+        member_milestone_details = cast(
+            dict[str, Any],
+            snippet.get("memberMilestoneChatDetails")
+            if isinstance(snippet.get("memberMilestoneChatDetails"), dict)
+            else {},
+        )
 
         message_text = (
             snippet.get("displayMessage")
-            or (snippet.get("textMessageDetails") or {}).get("messageText")
-            or (snippet.get("superChatDetails") or {}).get("userComment")
-            or (snippet.get("fanFundingEventDetails") or {}).get("userComment")
-            or (snippet.get("memberMilestoneChatDetails") or {}).get("userComment")
+            or text_message_details.get("messageText")
+            or super_chat_details.get("userComment")
+            or fan_funding_details.get("userComment")
+            or member_milestone_details.get("userComment")
             or ""
         )
         message_text = str(message_text).strip()
@@ -277,7 +317,7 @@ class YouTubeApiChatMonitor:
         try:
             normalized = published_at.replace("Z", "+00:00")
             timestamp = datetime.fromisoformat(normalized).astimezone(timezone.utc).timestamp()
-        except Exception:
+        except (TypeError, ValueError):
             return True
 
         return timestamp >= self._created_at - 10.0

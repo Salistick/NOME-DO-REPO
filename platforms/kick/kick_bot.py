@@ -7,6 +7,14 @@ from .kick_auth import KickAuth
 from .kick_chat_sender import KickChatSender
 from .kick_pusher_client import KickPusherClient
 
+KICK_BOT_RECOVERABLE_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+)
+
 
 class KickBot:
     def __init__(self, tts_manager: TTSManager):
@@ -83,15 +91,15 @@ class KickBot:
 
         try:
             self.pusher_client.stop()
-        except Exception:
-            pass
+        except KICK_BOT_RECOVERABLE_ERRORS as exc:
+            print(f"[KICK BOT] erro ao parar WebSocket Kick: {exc}")
 
         thread = self._thread
         if thread and thread.is_alive():
             try:
                 thread.join(timeout=5.0)
-            except Exception:
-                pass
+            except RuntimeError as exc:
+                print(f"[KICK BOT] erro ao aguardar thread Kick: {exc}")
 
         self._thread = None
         self._channel_override = ""
@@ -107,8 +115,8 @@ class KickBot:
     def shutdown(self):
         try:
             self.stop()
-        except Exception:
-            pass
+        except KICK_BOT_RECOVERABLE_ERRORS as exc:
+            print(f"[KICK BOT] erro ao finalizar Kick: {exc}")
 
     def _run(self, cancel_event: threading.Event, force_auth: bool):
         try:
@@ -157,13 +165,13 @@ class KickBot:
 
             suffix = " sem login" if self._public_mode else ""
             print(f"[KICK BOT] monitorando @{channel_slug}{suffix}")
-        except Exception as exc:
+        except KICK_BOT_RECOVERABLE_ERRORS as exc:
             self._status = "erro WebSocket Kick"
             print(f"[KICK BOT] Falha no WebSocket Kick: {exc}")
             try:
                 self.pusher_client.stop()
-            except Exception:
-                pass
+            except KICK_BOT_RECOVERABLE_ERRORS as stop_exc:
+                print(f"[KICK BOT] erro ao parar WebSocket Kick: {stop_exc}")
         finally:
             if not self.pusher_client.is_running():
                 self._running = False
@@ -202,7 +210,7 @@ class KickBot:
 
             print("[KICK BOT] Sessao Kick autenticada para envio de mensagens.")
             return True
-        except Exception as exc:
+        except KICK_BOT_RECOVERABLE_ERRORS as exc:
             print(f"[KICK BOT] Nao foi possivel autenticar envio Kick: {exc}")
             return False
 
@@ -216,7 +224,7 @@ class KickBot:
         with self._auth_lock:
             try:
                 self._token_data = self.auth.get_valid_cached_token()
-            except Exception as exc:
+            except KICK_BOT_RECOVERABLE_ERRORS as exc:
                 print(f"[KICK BOT] Token Kick indisponivel para envio: {exc}")
                 self._sender_authenticated = False
                 return {}
@@ -243,14 +251,15 @@ class KickBot:
                 if broadcaster_user_id:
                     self.pusher_client.broadcaster_user_id = broadcaster_user_id
                 return broadcaster_user_id
-            except Exception as exc:
+            except KICK_BOT_RECOVERABLE_ERRORS as exc:
                 print(f"[KICK BOT] Falha ao resolver broadcaster_user_id para envio: {exc}")
 
         return ""
 
     def _get_authenticated_channel_slug(self) -> str:
         token_data = self._token_data if isinstance(self._token_data, dict) else {}
-        profile = token_data.get("profile") if isinstance(token_data.get("profile"), dict) else {}
+        profile_value = token_data.get("profile")
+        profile = profile_value if isinstance(profile_value, dict) else {}
 
         for value in (
             token_data.get("username"),

@@ -1,6 +1,5 @@
 import requests
 
-
 YOUTUBE_LIVE_CHAT_MESSAGES_URL = "https://www.googleapis.com/youtube/v3/liveChat/messages"
 
 
@@ -17,7 +16,7 @@ class YouTubeChatSender:
 
         token = ""
         if callable(self.access_token_provider):
-            token = (self.access_token_provider() or "").strip()
+            token = str(self.access_token_provider() or "").strip()
 
         if not token:
             print("[YOUTUBE SENDER] Token OAuth indisponivel. Mensagem nao enviada.")

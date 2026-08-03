@@ -8,7 +8,6 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Optional
 
 import requests
 
@@ -19,10 +18,17 @@ from config import (
     KICK_SCOPES,
 )
 
-
 KICK_AUTH_URL = "https://id.kick.com/oauth/authorize"
 KICK_TOKEN_URL = "https://id.kick.com/oauth/token"
 KICK_USERS_URL = "https://api.kick.com/public/v1/users"
+KICK_AUTH_RECOVERABLE_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    requests.RequestException,
+)
 
 
 class OAuthCallbackServer:
@@ -31,11 +37,11 @@ class OAuthCallbackServer:
         self.host = parsed.hostname or "localhost"
         self.port = parsed.port or 80
         self.path = parsed.path or "/callback"
-        self.auth_code: Optional[str] = None
-        self.error: Optional[str] = None
-        self.state: Optional[str] = None
-        self._server: Optional[ThreadingHTTPServer] = None
-        self._thread: Optional[threading.Thread] = None
+        self.auth_code: str | None = None
+        self.error: str | None = None
+        self.state: str | None = None
+        self._server: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
 
     def start(self):
         outer = self
@@ -81,12 +87,12 @@ class OAuthCallbackServer:
         if self._server:
             try:
                 self._server.shutdown()
-            except Exception:
-                pass
+            except (OSError, RuntimeError) as exc:
+                print(f"[KICK AUTH] falha ao parar callback OAuth: {exc}")
             try:
                 self._server.server_close()
-            except Exception:
-                pass
+            except OSError as exc:
+                print(f"[KICK AUTH] falha ao fechar callback OAuth: {exc}")
 
     def wait_for_code(self, timeout=180, cancel_event: threading.Event | None = None):
         started = time.time()
@@ -119,7 +125,7 @@ class KickAuth:
         try:
             with open(self.token_cache_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except Exception:
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
             return {}
 
         return data if isinstance(data, dict) else {}
@@ -132,8 +138,8 @@ class KickAuth:
     def clear_token_cache(self) -> None:
         try:
             self.token_cache_file.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except OSError as exc:
+            print(f"[KICK AUTH] nao foi possivel limpar token salvo: {exc}")
 
     def run_browser_login(self, cancel_event: threading.Event | None = None) -> dict:
         if not self.is_configured():
@@ -233,7 +239,7 @@ class KickAuth:
                 merged = self._attach_profile(merged)
                 self.save_token_cache(merged)
                 return merged
-            except Exception as exc:
+            except KICK_AUTH_RECOVERABLE_ERRORS as exc:
                 print(f"[KICK AUTH] Falha ao renovar token salvo: {exc}")
 
         return self.run_browser_login(cancel_event=cancel_event)
@@ -257,7 +263,7 @@ class KickAuth:
             merged = self._attach_profile(merged)
             self.save_token_cache(merged)
             return merged
-        except Exception as exc:
+        except KICK_AUTH_RECOVERABLE_ERRORS as exc:
             print(f"[KICK AUTH] Falha ao renovar token salvo: {exc}")
             return {}
 
@@ -299,7 +305,7 @@ class KickAuth:
                 },
                 timeout=(5, 10),
             )
-        except Exception:
+        except (OSError, requests.RequestException):
             return token_data
 
         if response.status_code != 200:
@@ -307,7 +313,7 @@ class KickAuth:
 
         try:
             data = response.json()
-        except Exception:
+        except (requests.JSONDecodeError, TypeError, ValueError):
             return token_data
 
         profile = data.get("data")

@@ -13,7 +13,7 @@ class TTSConfigStore:
         try:
             with open(self.filepath, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
             return {}
 
     def save(self, data: dict) -> None:
@@ -25,5 +25,5 @@ class TTSConfigStore:
         try:
             if self.filepath.exists():
                 self.filepath.unlink()
-        except Exception:
-            pass
+        except OSError as exc:
+            print(f"[TTS CONFIG] nao foi possivel limpar configuracao: {exc}")

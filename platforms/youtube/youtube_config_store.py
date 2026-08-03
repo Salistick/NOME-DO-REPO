@@ -18,7 +18,7 @@ class YouTubeConfigStore:
         try:
             with open(self.filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except Exception:
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
             return self._default_data()
 
         if not isinstance(data, dict):
@@ -46,8 +46,8 @@ class YouTubeConfigStore:
         try:
             if self.filepath.exists():
                 self.filepath.unlink()
-        except Exception:
-            pass
+        except OSError as exc:
+            print(f"[YOUTUBE CONFIG] nao foi possivel limpar configuracao: {exc}")
 
     # ==================================
     # Helpers base

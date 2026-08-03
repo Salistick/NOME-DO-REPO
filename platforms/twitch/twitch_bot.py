@@ -1,13 +1,23 @@
 import random
 import threading
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
-from config import TWITCH_CHANNEL, TOKEN_CACHE_FILE, has_twitch_bot_sender_config
+from config import TOKEN_CACHE_FILE, TWITCH_CHANNEL, has_twitch_bot_sender_config
+
 from .twitch_auth import TwitchAuth
 from .twitch_cache import TokenCache
 from .twitch_irc import TwitchIRCClient
 from .twitch_sender import TwitchChatSender
+
+TWITCH_BOT_RECOVERABLE_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+)
 
 
 class TwitchBot:
@@ -17,21 +27,24 @@ class TwitchBot:
         self.cache = TokenCache(TOKEN_CACHE_FILE)
         self.auth = TwitchAuth(self.cache)
 
-        self.client: Optional[TwitchIRCClient] = None
+        self.client: TwitchIRCClient | None = None
         self.sender = TwitchChatSender()
 
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._running = False
         self._status = "desconectado"
         self._lock = threading.Lock()
 
-        self._token_data: Optional[dict] = None
-        self._message_callback: Optional[Callable[[dict], None]] = None
+        self._token_data: dict | None = None
+        self._message_callback: Callable[[dict], None] | None = None
         self._public_channel = ""
         self._public_mode = False
 
         self._manual_stop = False
         self._should_reconnect = False
+        self._announce_lock = threading.Lock()
+        self._announced_connection_channels: set[str] = set()
+        self._announcing_connection_channels: set[str] = set()
 
         self.tts = tts_manager
 
@@ -55,7 +68,7 @@ class TwitchBot:
     # Public API
     # ==================================
 
-    def start(self, token_data: dict, message_callback: Optional[Callable[[dict], None]] = None):
+    def start(self, token_data: dict, message_callback: Callable[[dict], None] | None = None):
 
         with self._lock:
 
@@ -71,6 +84,7 @@ class TwitchBot:
             self._message_callback = message_callback
             self._public_channel = ""
             self._public_mode = False
+            self._clear_connection_announcements()
 
             self._thread = threading.Thread(
                 target=self._run_forever,
@@ -80,7 +94,7 @@ class TwitchBot:
 
             self._thread.start()
 
-    def start_public_channel(self, channel_name: str, message_callback: Optional[Callable[[dict], None]] = None):
+    def start_public_channel(self, channel_name: str, message_callback: Callable[[dict], None] | None = None):
         channel = (channel_name or "").strip().lower().lstrip("@#")
         if not channel:
             raise ValueError("Informe o nome do canal Twitch.")
@@ -102,6 +116,7 @@ class TwitchBot:
             self._message_callback = message_callback
             self._public_channel = channel
             self._public_mode = True
+            self._clear_connection_announcements()
 
             self._thread = threading.Thread(
                 target=self._run_forever,
@@ -122,25 +137,26 @@ class TwitchBot:
         try:
             if self.client:
                 self.client.stop()
-        except Exception:
-            pass
+        except TWITCH_BOT_RECOVERABLE_ERRORS as exc:
+            print(f"[TWITCH BOT] erro ao parar IRC: {exc}")
 
         try:
             self.sender.disconnect()
-        except Exception:
-            pass
+        except TWITCH_BOT_RECOVERABLE_ERRORS as exc:
+            print(f"[TWITCH BOT] erro ao desconectar sender: {exc}")
 
         try:
             if self._thread and self._thread.is_alive():
                 self._thread.join(timeout=5.0)
-        except Exception:
-            pass
+        except RuntimeError as exc:
+            print(f"[TWITCH BOT] erro ao aguardar thread: {exc}")
 
         self.client = None
         self._token_data = None
         self._message_callback = None
         self._public_channel = ""
         self._public_mode = False
+        self._clear_connection_announcements()
         self._thread = None
         self._status = "desconectado"
 
@@ -150,8 +166,8 @@ class TwitchBot:
 
         try:
             self.cache.clear()
-        except Exception:
-            pass
+        except OSError as exc:
+            print(f"[TWITCH BOT] erro ao limpar token salvo: {exc}")
 
     # ==================================
     # Chat interaction
@@ -181,7 +197,7 @@ class TwitchBot:
             self.sender.send_message(channel, clean)
             return True
 
-        except Exception as exc:
+        except TWITCH_BOT_RECOVERABLE_ERRORS as exc:
             print(f"[TWITCH BOT] Falha ao enviar mensagem: {exc}")
             return False
 
@@ -229,7 +245,7 @@ class TwitchBot:
                 self._status = "reconectando"
                 print(f"[TWITCH BOT] Conexão perdida. Tentando reconectar em {retry_delay}s...")
 
-            except Exception as exc:
+            except TWITCH_BOT_RECOVERABLE_ERRORS as exc:
                 if self._manual_stop or not self._should_reconnect:
                     break
 
@@ -258,22 +274,20 @@ class TwitchBot:
             try:
                 if self.client:
                     self.client.stop()
-            except Exception:
-                pass
+            except TWITCH_BOT_RECOVERABLE_ERRORS as exc:
+                print(f"[TWITCH BOT] erro ao limpar IRC antes de reconectar: {exc}")
 
             try:
                 self.sender.disconnect()
-            except Exception:
-                pass
+            except TWITCH_BOT_RECOVERABLE_ERRORS as exc:
+                print(f"[TWITCH BOT] erro ao limpar sender antes de reconectar: {exc}")
 
             self.client = None
             retry_delay = min(retry_delay + 2, 15)
 
         self._running = False
 
-        if self._manual_stop:
-            self._status = "desconectado"
-        elif not self._should_reconnect and self._status != "erro":
+        if self._manual_stop or not self._should_reconnect and self._status != "erro":
             self._status = "desconectado"
 
     def _run_once(self):
@@ -364,21 +378,45 @@ class TwitchBot:
             if self._message_callback:
                 self._message_callback(message)
 
-        except Exception as exc:
+        except TWITCH_BOT_RECOVERABLE_ERRORS as exc:
             print(f"[TWITCH BOT] Erro no callback de mensagem: {exc}")
 
     def _announce_chat_connection(self, channel: str):
+        channel_key = (channel or "").strip().lower().lstrip("#")
+        if not channel_key:
+            return
+
+        with self._announce_lock:
+            if channel_key in self._announced_connection_channels:
+                print(f"[TWITCH BOT] Mensagem de conexao ja enviada nesta sessao em #{channel_key}.")
+                return
+            if channel_key in self._announcing_connection_channels:
+                return
+            self._announcing_connection_channels.add(channel_key)
+
         message = "Mensagem de voz conectado ao chat"
 
-        for attempt in range(2):
-            try:
-                if attempt:
-                    time.sleep(1.0)
-                self.send_chat_message(message)
-                print(f"[TWITCH BOT] Mensagem de conexao enviada em #{channel}.")
-                return
-            except Exception as exc:
-                print(f"[TWITCH BOT] Falha ao enviar mensagem de conexao (tentativa {attempt + 1}/2): {exc}")
+        try:
+            for attempt in range(2):
+                try:
+                    if attempt:
+                        time.sleep(1.0)
+                    if self.send_chat_message(message):
+                        with self._announce_lock:
+                            self._announced_connection_channels.add(channel_key)
+                        print(f"[TWITCH BOT] Mensagem de conexao enviada em #{channel_key}.")
+                        return
+                    print(f"[TWITCH BOT] Falha ao enviar mensagem de conexao (tentativa {attempt + 1}/2).")
+                except TWITCH_BOT_RECOVERABLE_ERRORS as exc:
+                    print(f"[TWITCH BOT] Falha ao enviar mensagem de conexao (tentativa {attempt + 1}/2): {exc}")
+        finally:
+            with self._announce_lock:
+                self._announcing_connection_channels.discard(channel_key)
+
+    def _clear_connection_announcements(self) -> None:
+        with self._announce_lock:
+            self._announced_connection_channels.clear()
+            self._announcing_connection_channels.clear()
 
     # ==================================
     # Shutdown completo
@@ -388,8 +426,8 @@ class TwitchBot:
 
         try:
             self.stop()
-        except Exception:
-            pass
+        except TWITCH_BOT_RECOVERABLE_ERRORS as exc:
+            print(f"[TWITCH BOT] erro ao finalizar Twitch: {exc}")
 
     def _get_monitored_channel(self) -> str:
         if self.client and getattr(self.client, "channel_name", ""):

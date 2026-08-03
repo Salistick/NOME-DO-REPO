@@ -12,7 +12,17 @@ from config import (
     TWITCH_TOKEN_URL,
     TWITCH_VALIDATE_URL,
 )
+
 from .twitch_irc import TwitchIRCClient
+
+TWITCH_SENDER_RECOVERABLE_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    requests.RequestException,
+)
 
 
 class TwitchChatSender:
@@ -55,14 +65,20 @@ class TwitchChatSender:
         with self._lock:
             try:
                 self._ensure_connected_unlocked(channel_name)
-                self._client.send_chat_message(text[:450])
+                client = self._client
+                if client is None:
+                    raise RuntimeError("Sender Twitch nao conectou.")
+                client.send_chat_message(text[:450])
                 return True
-            except Exception:
+            except TWITCH_SENDER_RECOVERABLE_ERRORS:
                 # Se a primeira tentativa falhar, derruba a conexao do sender
                 # e refaz uma vez para evitar falhas no primeiro PRIVMSG apos JOIN.
                 self._disconnect_unlocked()
                 self._ensure_connected_unlocked(channel_name)
-                self._client.send_chat_message(text[:450])
+                client = self._client
+                if client is None:
+                    raise RuntimeError("Sender Twitch nao reconectou.")
+                client.send_chat_message(text[:450])
                 return True
 
     def _disconnect_unlocked(self):
@@ -72,8 +88,8 @@ class TwitchChatSender:
 
         try:
             self._client.stop()
-        except Exception:
-            pass
+        except TWITCH_SENDER_RECOVERABLE_ERRORS as exc:
+            print(f"[TWITCH SENDER] erro ao fechar conexao: {exc}")
 
         self._client = None
         self._connected_channel = ""

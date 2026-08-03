@@ -1,5 +1,8 @@
+from typing import Any, cast
+
 import requests
 from yt_dlp import YoutubeDL
+from yt_dlp.utils import DownloadError, ExtractorError, UnsupportedError
 
 
 class _SilentYTDLPLogger:
@@ -50,7 +53,7 @@ class YouTubeLiveResolver:
         cached = self._resolve_from_cache(channel_id)
         if cached:
             if access_token:
-                cached = self._enrich_live_chat_id(cached, access_token)
+                cached = self._enrich_live_chat_id(cached, access_token) or cached
                 self._update_cache(channel_id, cached)
             return cached
 
@@ -59,7 +62,7 @@ class YouTubeLiveResolver:
         if access_token and self._reserve_api_search_attempt(channel_id):
             live_data = self._resolve_from_youtube_api(channel_id, access_token)
             if live_data:
-                live_data = self._enrich_live_chat_id(live_data, access_token)
+                live_data = self._enrich_live_chat_id(live_data, access_token) or live_data
                 self._update_cache(channel_id, live_data)
                 print(
                     f"[YOUTUBE RESOLVER] Live ativa encontrada via API | "
@@ -74,7 +77,7 @@ class YouTubeLiveResolver:
         live_data = self._resolve_from_live_endpoint(channel_id)
         if live_data:
             if access_token:
-                live_data = self._enrich_live_chat_id(live_data, access_token)
+                live_data = self._enrich_live_chat_id(live_data, access_token) or live_data
             self._update_cache(channel_id, live_data)
             print(
                 f"[YOUTUBE RESOLVER] Live ativa encontrada via /live | "
@@ -85,7 +88,7 @@ class YouTubeLiveResolver:
         live_data = self._resolve_from_streams(channel_id)
         if live_data:
             if access_token:
-                live_data = self._enrich_live_chat_id(live_data, access_token)
+                live_data = self._enrich_live_chat_id(live_data, access_token) or live_data
             self._update_cache(channel_id, live_data)
             print(
                 f"[YOUTUBE RESOLVER] Live ativa encontrada via /streams | "
@@ -261,7 +264,7 @@ class YouTubeLiveResolver:
                 headers={"Authorization": f"Bearer {access_token}"},
                 timeout=(3, 5),
             )
-        except Exception as exc:
+        except (OSError, requests.RequestException) as exc:
             print(f"[YOUTUBE RESOLVER] Falha chamando API do YouTube: {exc}")
             return None
 
@@ -314,7 +317,7 @@ class YouTubeLiveResolver:
                 headers={"Authorization": f"Bearer {access_token}"},
                 timeout=(3, 5),
             )
-        except Exception as exc:
+        except (OSError, requests.RequestException) as exc:
             print(f"[YOUTUBE RESOLVER] Falha buscando live_chat_id: {exc}")
             return live_data
 
@@ -468,9 +471,12 @@ class YouTubeLiveResolver:
 
     def _extract_info(self, url: str) -> dict | None:
         try:
-            with YoutubeDL(self._ydl_opts) as ydl:
-                return ydl.extract_info(url, download=False)
-        except Exception:
+            with YoutubeDL(cast(Any, self._ydl_opts)) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if isinstance(info, dict):
+                    return dict(info)
+                return None
+        except (DownloadError, ExtractorError, UnsupportedError, OSError, RuntimeError, ValueError, TypeError):
             return None
 
     def _build_watch_url(self, video_id: str) -> str:
@@ -479,9 +485,9 @@ class YouTubeLiveResolver:
     def _build_public_channel_urls(self, channel_identifier: str) -> tuple[str, str]:
         value = self._normalize_public_channel_identifier(channel_identifier)
 
-        if value.startswith("http://") or value.startswith("https://"):
+        if value.startswith(("http://", "https://")):
             base = value.rstrip("/")
-            if base.endswith("/live") or base.endswith("/streams"):
+            if base.endswith(("/live", "/streams")):
                 base = base.rsplit("/", 1)[0]
         elif value.startswith("UC"):
             base = f"https://www.youtube.com/channel/{value}"

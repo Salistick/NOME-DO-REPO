@@ -4,13 +4,12 @@ import re
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import requests
 
 from app_version import CURRENT_APP_VERSION
-
 
 GITHUB_OWNER = "Salistick"
 GITHUB_REPO = "NOME-DO-REPO"
@@ -23,6 +22,7 @@ SKIP_UPDATE_VERSIONS = {"", "dev", "manual"}
 PYINSTALLER_RESET_ENV_NAME = "PYINSTALLER_RESET_ENVIRONMENT"
 UPDATE_LOG_RELATIVE_PATH = Path("data") / "logs" / "updater.log"
 INSTALLER_WAIT_SECONDS = 15
+LOGGER = logging.getLogger(__name__)
 
 
 def _is_supported_runtime() -> bool:
@@ -192,7 +192,7 @@ def _reset_windows_dll_directory() -> None:
         import ctypes
 
         ctypes.windll.kernel32.SetDllDirectoryW(None)
-    except Exception as exc:
+    except (AttributeError, OSError) as exc:
         print(f"[UPDATER] Nao foi possivel limpar o diretorio de DLL herdado: {exc}")
 
 
@@ -237,7 +237,7 @@ def try_start_auto_update(notify: Callable[[str], None] | None = None) -> bool:
         )
         response.raise_for_status()
         latest_release = response.json()
-    except Exception as exc:
+    except (OSError, requests.RequestException, TypeError, ValueError) as exc:
         print(f"[UPDATER] Falha ao consultar release mais recente: {exc}")
         return False
 
@@ -266,7 +266,7 @@ def try_start_auto_update(notify: Callable[[str], None] | None = None) -> bool:
         current_exe = Path(sys.executable).resolve()
         installed_exe = _get_expected_installed_exe_path(current_exe)
         script_path = _write_update_script(installer_path, current_exe, installed_exe, os.getpid())
-        logging.info(
+        LOGGER.info(
             "[UPDATER] Iniciando atualizacao %s | installer=%s | script=%s | log=%s",
             latest_tag,
             installer_path,
@@ -275,7 +275,7 @@ def try_start_auto_update(notify: Callable[[str], None] | None = None) -> bool:
         )
         _launch_update_script(script_path)
         return True
-    except Exception as exc:
-        logging.exception("[UPDATER] Falha ao iniciar a atualizacao automatica")
+    except (OSError, requests.RequestException, subprocess.SubprocessError, TypeError, ValueError) as exc:
+        LOGGER.exception("[UPDATER] Falha ao iniciar a atualizacao automatica")
         print(f"[UPDATER] Falha ao iniciar a atualizacao automatica: {exc}")
         return False

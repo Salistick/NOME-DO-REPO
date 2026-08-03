@@ -1,9 +1,33 @@
 import signal
 import threading
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
+from typing import Any, cast
 
 import pytchat
+from pytchat import (
+    ChatParseException,
+    InvalidVideoIdException,
+    PatternUnmatchError,
+    ResponseContextError,
+    UnknownConnectionError,
+    VideoInfoParseError,
+)
+
+YOUTUBE_CHAT_RECOVERABLE_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    ChatParseException,
+    InvalidVideoIdException,
+    PatternUnmatchError,
+    ResponseContextError,
+    UnknownConnectionError,
+    VideoInfoParseError,
+)
 
 
 class YouTubeChatMonitor:
@@ -23,7 +47,7 @@ class YouTubeChatMonitor:
         self.max_consecutive_failures = max(1, int(max_consecutive_failures))
 
         self._chat = None
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._running = False
         self._lock = threading.Lock()
 
@@ -56,8 +80,8 @@ class YouTubeChatMonitor:
         try:
             if self._thread and self._thread.is_alive():
                 self._thread.join(timeout=3.0)
-        except Exception:
-            pass
+        except RuntimeError as exc:
+            print(f"[YOUTUBE CHAT] erro ao aguardar thread: {exc}")
 
         self._thread = None
 
@@ -81,7 +105,7 @@ class YouTubeChatMonitor:
                     if not self._chat.is_alive():
                         raise RuntimeError("Monitor do chat do YouTube não está mais ativo.")
 
-                    data = self._chat.get()
+                    data = cast(Any, self._chat.get())
                     items = data.sync_items()
 
                     had_messages = False
@@ -105,7 +129,7 @@ class YouTubeChatMonitor:
                     # se voltou ao normal, zera contador
                     consecutive_failures = 0
 
-                except Exception as exc:
+                except YOUTUBE_CHAT_RECOVERABLE_ERRORS as exc:
                     if not self._running:
                         break
 
@@ -121,7 +145,7 @@ class YouTubeChatMonitor:
 
                     try:
                         self._restart_chat()
-                    except Exception as restart_exc:
+                    except YOUTUBE_CHAT_RECOVERABLE_ERRORS as restart_exc:
                         print(f"[YOUTUBE CHAT] Erro ao reiniciar monitor: {restart_exc}")
 
                     session_started_at = time.time()
@@ -158,14 +182,14 @@ class YouTubeChatMonitor:
 
         try:
             chat.terminate()
-        except Exception:
-            pass
+        except YOUTUBE_CHAT_RECOVERABLE_ERRORS as exc:
+            print(f"[YOUTUBE CHAT] erro ao encerrar pytchat: {exc}")
 
     # ==================================
     # Parsing
     # ==================================
 
-    def _parse_item(self, item) -> Optional[dict]:
+    def _parse_item(self, item) -> dict | None:
         try:
             author = getattr(item, "author", None)
 
@@ -212,7 +236,7 @@ class YouTubeChatMonitor:
                 "is_broadcaster": author_role["is_broadcaster"],
             }
 
-        except Exception as exc:
+        except YOUTUBE_CHAT_RECOVERABLE_ERRORS as exc:
             print(f"[YOUTUBE CHAT] Falha ao parsear item: {exc}")
             return None
 

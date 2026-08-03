@@ -3,6 +3,14 @@ from tkinter import messagebox, simpledialog, ttk
 
 from app_version import CURRENT_APP_VERSION
 
+GUI_RECOVERABLE_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    tk.TclError,
+)
+
 
 class RoundedToggleButton(tk.Canvas):
     def __init__(
@@ -140,6 +148,7 @@ class LauncherGUI:
         on_toggle_twitch,
         on_toggle_youtube,
         on_toggle_kick,
+        on_configure_polly,
         get_app_state,
         save_app_state,
     ):
@@ -150,6 +159,7 @@ class LauncherGUI:
         self.on_toggle_twitch = on_toggle_twitch
         self.on_toggle_youtube = on_toggle_youtube
         self.on_toggle_kick = on_toggle_kick
+        self.on_configure_polly = on_configure_polly
         self.get_app_state = get_app_state
         self.save_app_state = save_app_state
 
@@ -178,15 +188,15 @@ class LauncherGUI:
         return version
 
     def _main_window_height(self) -> int:
-        return 580
+        return 625
 
     def _configure_styles(self):
         style = ttk.Style(self.root)
 
         try:
             style.theme_use("clam")
-        except Exception:
-            pass
+        except tk.TclError as exc:
+            print(f"[GUI] nao foi possivel aplicar tema ttk: {exc}")
 
         style.configure(
             "TTS.TCombobox",
@@ -247,22 +257,21 @@ class LauncherGUI:
                 current_width = max(self.root.winfo_width(), 440)
                 expected_height = self._main_window_height()
                 current_height = max(self.root.winfo_height(), expected_height)
-                if current_height > expected_height:
-                    current_height = expected_height
+                current_height = min(current_height, expected_height)
                 if current_width != self.root.winfo_width() or current_height != self.root.winfo_height():
                     pos_x = max(0, self.root.winfo_x())
                     pos_y = max(0, self.root.winfo_y())
                     self.root.geometry(f"{current_width}x{current_height}+{pos_x}+{pos_y}")
                 return
-            except Exception:
-                pass
+            except tk.TclError as exc:
+                print(f"[GUI] geometria salva invalida, centralizando janela: {exc}")
 
         self._center_window(self.root, width=440, height=self._main_window_height())
 
     def _save_main_window_geometry(self):
         try:
             geometry = self.root.geometry()
-        except Exception:
+        except tk.TclError:
             return
 
         state = self.get_app_state() or {}
@@ -444,6 +453,21 @@ class LauncherGUI:
             cursor="hand2",
         ).pack(side="left", padx=(8, 0))
 
+        tk.Button(
+            audio_frame,
+            text="Configurar Amazon Polly",
+            command=self._configure_polly,
+            font=("Segoe UI", 9, "bold"),
+            bg="#202020",
+            fg="#FFFFFF",
+            activebackground="#303030",
+            activeforeground="#FFFFFF",
+            relief="flat",
+            padx=10,
+            pady=6,
+            cursor="hand2",
+        ).pack(anchor="w", pady=(10, 0))
+
         footer_frame = tk.Frame(container, bg="#111111")
         footer_frame.pack(side="bottom", fill="x", pady=(18, 0))
 
@@ -466,7 +490,7 @@ class LauncherGUI:
             else:
                 devices = self.tts_manager.list_audio_output_devices()
             selected_device = self.tts_manager.get_audio_output_device()
-        except Exception as exc:
+        except GUI_RECOVERABLE_ERRORS as exc:
             devices = []
             selected_device = ""
             if show_error:
@@ -526,6 +550,10 @@ class LauncherGUI:
                 parent=self.root,
             )
 
+    def _configure_polly(self):
+        if self.on_configure_polly:
+            self.on_configure_polly()
+
     def confirm_twitch_disconnect(self) -> bool:
         return messagebox.askyesno(
             "Desconectar Twitch",
@@ -584,7 +612,7 @@ class LauncherGUI:
                 self.platform_menu_window.lift()
                 self.platform_menu_window.focus_force()
                 return
-            except Exception:
+            except tk.TclError:
                 self.platform_menu_window = None
 
         extra_actions = extra_actions or []
@@ -604,8 +632,8 @@ class LauncherGUI:
         def close_window():
             try:
                 window.grab_release()
-            except Exception:
-                pass
+            except tk.TclError as exc:
+                print(f"[GUI] falha ao liberar menu {title}: {exc}")
             self.platform_menu_window = None
             window.destroy()
 
@@ -683,7 +711,7 @@ class LauncherGUI:
         saved_auth = False
         try:
             saved_auth = bool(self.kick_bot and self.kick_bot.has_saved_auth())
-        except Exception:
+        except GUI_RECOVERABLE_ERRORS:
             saved_auth = False
         return saved_channel or saved_auth
 
@@ -730,7 +758,7 @@ class LauncherGUI:
                 self.youtube_menu_window.lift()
                 self.youtube_menu_window.focus_force()
                 return
-            except Exception:
+            except tk.TclError:
                 self.youtube_menu_window = None
 
         window = tk.Toplevel(self.root)
@@ -746,8 +774,8 @@ class LauncherGUI:
         def close_window():
             try:
                 window.grab_release()
-            except Exception:
-                pass
+            except tk.TclError as exc:
+                print(f"[GUI] falha ao liberar menu YouTube: {exc}")
             self.youtube_menu_window = None
             window.destroy()
 
@@ -927,20 +955,20 @@ class LauncherGUI:
         try:
             if self.twitch_bot.is_running():
                 self.twitch_bot.stop()
-        except Exception:
-            pass
+        except GUI_RECOVERABLE_ERRORS as exc:
+            print(f"[GUI] erro ao encerrar Twitch: {exc}")
 
         try:
             if self.youtube_bot.is_running():
                 self.youtube_bot.stop()
-        except Exception:
-            pass
+        except GUI_RECOVERABLE_ERRORS as exc:
+            print(f"[GUI] erro ao encerrar YouTube: {exc}")
 
         try:
             if self.kick_bot and self.kick_bot.is_running():
                 self.kick_bot.stop()
-        except Exception:
-            pass
+        except GUI_RECOVERABLE_ERRORS as exc:
+            print(f"[GUI] erro ao encerrar Kick: {exc}")
 
         self.root.after(100, self.root.destroy)
 

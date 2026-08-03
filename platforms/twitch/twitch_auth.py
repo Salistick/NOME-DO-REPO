@@ -4,7 +4,6 @@ import time
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Optional
 
 import requests
 
@@ -17,18 +16,28 @@ from config import (
     TWITCH_TOKEN_URL,
     TWITCH_VALIDATE_URL,
 )
+
 from .twitch_cache import TokenCache
+
+TWITCH_AUTH_RECOVERABLE_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    requests.RequestException,
+)
 
 
 class OAuthCallbackServer:
     def __init__(self, host: str, port: int):
         self.host = host
         self.port = port
-        self.auth_code: Optional[str] = None
-        self.error: Optional[str] = None
-        self.state: Optional[str] = None
-        self._server: Optional[ThreadingHTTPServer] = None
-        self._thread: Optional[threading.Thread] = None
+        self.auth_code: str | None = None
+        self.error: str | None = None
+        self.state: str | None = None
+        self._server: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
 
     def start(self):
         outer = self
@@ -78,13 +87,13 @@ class OAuthCallbackServer:
         if self._server:
             try:
                 self._server.shutdown()
-            except Exception:
-                pass
+            except (OSError, RuntimeError) as exc:
+                print(f"[TWITCH AUTH] falha ao parar callback OAuth: {exc}")
 
             try:
                 self._server.server_close()
-            except Exception:
-                pass
+            except OSError as exc:
+                print(f"[TWITCH AUTH] falha ao fechar callback OAuth: {exc}")
 
     def wait_for_code(self, timeout=180, cancel_event: threading.Event | None = None):
         start = time.time()
@@ -265,7 +274,7 @@ class TwitchAuth:
                 try:
                     enriched = self.enrich_with_validation(token_data)
                     self.cache.save(enriched)
-                except Exception as e:
+                except TWITCH_AUTH_RECOVERABLE_ERRORS as e:
                     print("[TWITCH AUTH] validacao posterior falhou:", e)
 
             threading.Thread(
@@ -322,12 +331,12 @@ class TwitchAuth:
                             enriched = self.enrich_with_validation(refreshed)
                             self.cache.save(enriched)
                             return enriched
-                        except Exception as exc:
+                        except TWITCH_AUTH_RECOVERABLE_ERRORS as exc:
                             print(f"[TWITCH AUTH] Falha ao enriquecer token renovado: {exc}")
 
                     return refreshed
 
-                except Exception as exc:
+                except TWITCH_AUTH_RECOVERABLE_ERRORS as exc:
                     print(f"[TWITCH AUTH] Falha ao renovar token salvo: {exc}")
 
         return self.run_browser_login(cancel_event=cancel_event)

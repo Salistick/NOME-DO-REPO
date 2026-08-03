@@ -35,7 +35,7 @@ class AppStateStore:
         try:
             with open(self.filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except Exception:
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
             return _default_state()
 
         defaults = _default_state()

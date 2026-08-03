@@ -1,7 +1,7 @@
 import re
 import socket
 import ssl
-from typing import Callable, Optional
+from collections.abc import Callable
 
 
 def parse_irc_tags(raw_tags: str) -> dict[str, str]:
@@ -60,7 +60,7 @@ class TwitchIRCClient:
         self.host = host
         self.port = port
         self.anonymous = bool(anonymous)
-        self.sock: Optional[ssl.SSLSocket] = None
+        self.sock: ssl.SSLSocket | None = None
         self.buffer = ""
         self._running = False
 
@@ -87,13 +87,13 @@ class TwitchIRCClient:
         if self.sock:
             try:
                 self.sock.shutdown(socket.SHUT_RDWR)
-            except Exception:
-                pass
+            except OSError as exc:
+                print(f"[TWITCH IRC] falha ao encerrar socket: {exc}")
 
             try:
                 self.sock.close()
-            except Exception:
-                pass
+            except OSError as exc:
+                print(f"[TWITCH IRC] falha ao fechar socket: {exc}")
 
             self.sock = None
 
@@ -117,7 +117,7 @@ class TwitchIRCClient:
 
         try:
             data = self.sock.recv(4096)
-        except socket.timeout:
+        except TimeoutError:
             return []
         except OSError as exc:
             raise ConnectionError(str(exc)) from exc
@@ -143,7 +143,7 @@ class TwitchIRCClient:
                     if line.startswith("PING "):
                         try:
                             self.send_line(line.replace("PING", "PONG", 1))
-                        except Exception:
+                        except (OSError, RuntimeError):
                             self._running = False
                             break
                         continue
@@ -160,14 +160,14 @@ class TwitchIRCClient:
                 if self._running:
                     print("Socket IRC finalizado.")
                 break
-            except Exception as exc:
+            except (RuntimeError, ValueError, TypeError, KeyError, AttributeError) as exc:
                 if self._running:
                     print(f"Erro no loop IRC: {exc}")
                 break
 
         self._running = False
 
-    def parse_privmsg(self, line: str) -> Optional[dict]:
+    def parse_privmsg(self, line: str) -> dict | None:
         pattern = r"^(?:@(?P<tags>[^ ]+) )?:(?P<prefix>[^ ]+) (?P<command>[A-Z]+) (?P<channel>#[^ ]+) :(?P<message>.*)$"
         match = re.match(pattern, line)
         if not match:

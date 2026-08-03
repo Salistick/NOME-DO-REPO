@@ -5,7 +5,6 @@ import unicodedata
 
 from services.tts.pronunciation_rules import load_pronunciation_rules
 
-
 URL_PATTERN = re.compile(
     r"(https?://\S+|www\.\S+|\S+\.(com|net|org|gg|tv|io|dev|br|app|me|xyz|live|gg/\S*|com/\S*))",
     re.IGNORECASE,
@@ -259,7 +258,7 @@ def remove_emojis_and_symbols(text: str) -> str:
             cleaned.append(ch)
             continue
 
-        if category.startswith("L") or category.startswith("N"):
+        if category.startswith(("L", "N")):
             cleaned.append(ch)
             continue
 
@@ -554,7 +553,7 @@ def convert_money_amounts(text: str) -> str:
             return match.group(0)
 
         reais = int(amount)
-        centavos = int(round((amount - reais) * 100))
+        centavos = round((amount - reais) * 100)
         parts: list[str] = []
 
         if reais:
@@ -722,10 +721,7 @@ def looks_like_spam(text: str) -> bool:
             return True
 
     laugh_like = compact.replace("h", "").replace("a", "").replace("k", "").replace("s", "").replace("r", "")
-    if len(compact) >= 12 and len(laugh_like) == 0:
-        return True
-
-    return False
+    return bool(len(compact) >= 12 and len(laugh_like) == 0)
 
 
 def _tts_debug_enabled() -> bool:

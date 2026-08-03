@@ -34,7 +34,7 @@ class YouTubeMessageStore:
         try:
             with open(self.filepath, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except Exception:
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
             return []
 
         if not isinstance(data, dict):
@@ -184,8 +184,8 @@ class YouTubeMessageStore:
             try:
                 if self.filepath.exists():
                     self.filepath.unlink()
-            except Exception:
-                pass
+            except OSError as exc:
+                print(f"[YOUTUBE STORE] nao foi possivel limpar mensagens: {exc}")
 
     # ==================================
     # Controle de mensagens processadas

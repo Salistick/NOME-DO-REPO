@@ -1,6 +1,5 @@
-from dataclasses import dataclass, field
 import time
-
+from dataclasses import dataclass, field
 
 SUPPORTED_TTS_PLATFORMS = ("twitch", "youtube", "kick")
 

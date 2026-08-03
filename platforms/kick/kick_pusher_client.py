@@ -13,7 +13,6 @@ from .kick_pusher_event_mapper import (
     map_kick_pusher_chat_message_event,
 )
 
-
 PUSHER_KEY = "32cbd69e4b950bf97679"
 PUSHER_WS_BASE = "wss://ws-us2.pusher.com"
 PUSHER_CLIENT_VERSION = "8.4.0"
@@ -22,6 +21,15 @@ PUSHER_CONNECT_TIMEOUT_SECONDS = 30.0
 PUSHER_MAX_PING_INTERVAL_SECONDS = 45.0
 PUSHER_RESUBSCRIBE_INTERVAL_SECONDS = 30.0 * 60.0
 PUSHER_STALE_MIN_SECONDS = 180.0
+KICK_PUSHER_RECOVERABLE_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    requests.RequestException,
+    websocket.WebSocketException,
+)
 
 
 class KickPusherClient:
@@ -88,15 +96,15 @@ class KickPusherClient:
         if ws is not None:
             try:
                 ws.close()
-            except Exception:
-                pass
+            except (OSError, websocket.WebSocketException) as exc:
+                print(f"[KICK WS] erro ao fechar socket: {exc}")
 
         thread = self._thread
         if thread and thread.is_alive():
             try:
                 thread.join(timeout=3.0)
-            except Exception:
-                pass
+            except RuntimeError as exc:
+                print(f"[KICK WS] erro ao aguardar thread: {exc}")
 
         self._thread = None
         self._status = "desconectado"
@@ -125,11 +133,12 @@ class KickPusherClient:
         for candidate in self._slug_candidates(slug):
             try:
                 data = self._fetch_channel(candidate)
-            except Exception as exc:
+            except KICK_PUSHER_RECOVERABLE_ERRORS as exc:
                 last_error = exc
                 continue
 
-            chatroom = data.get("chatroom") if isinstance(data.get("chatroom"), dict) else {}
+            chatroom_value = data.get("chatroom")
+            chatroom = chatroom_value if isinstance(chatroom_value, dict) else {}
             chatroom_id = (
                 data.get("chatroom_id")
                 or data.get("chatroomId")
@@ -148,7 +157,9 @@ class KickPusherClient:
             return {
                 "slug": resolved_slug or candidate,
                 "chatroom_id": chatroom_id,
-                "channel_id": data.get("id") or data.get("channel_id") or chatroom.get("channel_id"),
+                "channel_id": (
+                    data.get("id") or data.get("channel_id") or chatroom.get("channel_id")
+                ),
                 "broadcaster_user_id": (
                     data.get("user_id")
                     or data.get("broadcaster_user_id")
@@ -165,7 +176,7 @@ class KickPusherClient:
         while not self._stop_event.is_set():
             try:
                 self._connect_once()
-            except Exception as exc:
+            except KICK_PUSHER_RECOVERABLE_ERRORS as exc:
                 if self._stop_event.is_set():
                     break
                 self._last_error = str(exc)
@@ -231,19 +242,21 @@ class KickPusherClient:
 
                 if not raw:
                     raise RuntimeError("WebSocket Kick fechou sem dados.")
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="ignore")
                 self._handle_frame(raw)
         finally:
             if self._ws is ws:
                 self._ws = None
             try:
                 ws.close()
-            except Exception:
-                pass
+            except (OSError, websocket.WebSocketException) as exc:
+                print(f"[KICK WS] erro ao fechar socket: {exc}")
 
     def _handle_frame(self, raw: str) -> None:
         try:
             payload = json.loads(raw)
-        except Exception:
+        except (json.JSONDecodeError, TypeError, ValueError):
             return
 
         event_name = str(payload.get("event") or "").strip()
@@ -256,8 +269,10 @@ class KickPusherClient:
             if isinstance(connection_data, dict):
                 activity_timeout = connection_data.get("activity_timeout")
                 try:
+                    if activity_timeout is None:
+                        raise ValueError("activity_timeout ausente")
                     self._activity_timeout_seconds = max(10.0, float(activity_timeout))
-                except Exception:
+                except (TypeError, ValueError):
                     self._activity_timeout_seconds = 60.0
 
             self._status = self._format_status("WebSocket Kick conectado")
@@ -350,14 +365,14 @@ class KickPusherClient:
             raise RuntimeError(f"Kick retornou status {response.status_code}")
         data = response.json()
         if not isinstance(data, dict):
-            raise RuntimeError("Resposta invalida da Kick.")
+            raise TypeError("Resposta invalida da Kick.")
         return data
 
     def _decode_data(self, value: Any) -> Any:
         if isinstance(value, str):
             try:
                 return json.loads(value)
-            except Exception:
+            except (json.JSONDecodeError, TypeError, ValueError):
                 return value
         return value
 

@@ -2,7 +2,6 @@ import requests
 
 from config import KICK_CLIENT_ID
 
-
 KICK_CHAT_URL = "https://api.kick.com/public/v1/chat"
 
 
@@ -18,7 +17,8 @@ class KickChatSender:
 
         token_data = {}
         if callable(self.token_provider):
-            token_data = self.token_provider() or {}
+            token_result = self.token_provider()
+            token_data = token_result if isinstance(token_result, dict) else {}
 
         access_token = (token_data.get("access_token") or "").strip()
         if not access_token:

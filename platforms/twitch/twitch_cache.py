@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 
 class TokenCache:
@@ -10,14 +10,14 @@ class TokenCache:
     def exists(self) -> bool:
         return self.filepath.exists()
 
-    def load(self) -> Optional[dict[str, Any]]:
+    def load(self) -> dict[str, Any] | None:
         if not self.filepath.exists():
             return None
 
         try:
             with open(self.filepath, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
             return None
 
     def save(self, data: dict[str, Any]) -> None:

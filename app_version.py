@@ -2,7 +2,6 @@ import os
 import sys
 from pathlib import Path
 
-
 DEFAULT_APP_VERSION = "dev"
 VERSION_FILE_NAME = "version.txt"
 
@@ -27,7 +26,7 @@ def get_app_version() -> str:
                 value = path.read_text(encoding="utf-8").strip()
                 if value:
                     return value
-        except Exception:
+        except OSError:
             continue
 
     env_value = os.getenv("TTSLIVE_VERSION", "").strip()

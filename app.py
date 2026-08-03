@@ -1,8 +1,8 @@
 import sys
 import threading
 import time
-import traceback
 import tkinter as tk
+import traceback
 from tkinter import messagebox
 
 from app_state import AppStateStore
@@ -24,7 +24,19 @@ from logging_setup import configure_logging
 from platforms.kick.kick_bot import KickBot
 from platforms.twitch.twitch_bot import TwitchBot
 from platforms.youtube.youtube_bot import YouTubeBot
+from services.tts.polly_setup_dialog import (
+    configure_polly_credentials,
+    ensure_polly_credentials_configured,
+)
 from services.tts.tts_manager import TTSManager
+
+APP_RECOVERABLE_ERRORS = (
+    RuntimeError,
+    OSError,
+    ValueError,
+    TypeError,
+    tk.TclError,
+)
 
 
 class StartupStatusWindow:
@@ -34,7 +46,6 @@ class StartupStatusWindow:
         self.root.geometry("460x175")
         self.root.resizable(False, False)
         self.root.configure(bg="#111111")
-        self.root.attributes("-topmost", True)
 
         frame = tk.Frame(self.root, bg="#111111")
         frame.pack(fill="both", expand=True, padx=26, pady=22)
@@ -88,14 +99,14 @@ class StartupStatusWindow:
         try:
             self.root.update_idletasks()
             self.root.update()
-        except Exception:
-            pass
+        except tk.TclError as exc:
+            print("[APP] falha ao atualizar janela inicial:", exc)
 
     def close(self):
         try:
             self.root.destroy()
-        except Exception:
-            pass
+        except tk.TclError as exc:
+            print("[APP] falha ao fechar janela inicial:", exc)
 
 
 def show_critical_error(message: str):
@@ -104,7 +115,7 @@ def show_critical_error(message: str):
         root.withdraw()
         messagebox.showerror("TTS Live - Erro critico", message)
         root.destroy()
-    except Exception:
+    except tk.TclError:
         print(message)
 
 
@@ -147,7 +158,7 @@ def validate_runtime_environment() -> None:
         try:
             probe_file.write_text("ok", encoding="utf-8")
             probe_file.unlink(missing_ok=True)
-        except Exception as exc:
+        except OSError as exc:
             raise RuntimeError(
                 f"Sem permissao de escrita em {directory}. Verifique a pasta do bot."
             ) from exc
@@ -166,6 +177,10 @@ def main():
         startup_window.set_message("Validando configuracao...")
         validate_local_config(require_twitch=False)
         validate_required_env_values()
+
+        startup_window.set_message("Configurando Amazon Polly...")
+        if not ensure_polly_credentials_configured(startup_window.root, required=True):
+            return
 
         startup_window.set_message("Carregando dados do bot...")
         app_state_store = AppStateStore(APP_STATE_FILE)
@@ -227,6 +242,21 @@ def main():
             new_state["platforms"].setdefault("kick", {"enabled": False})
             new_state["platforms"]["kick"]["enabled"] = bool(enabled)
             save_app_state(new_state)
+
+        def on_configure_polly():
+            if not gui:
+                return
+            if not configure_polly_credentials(gui.root):
+                return
+            try:
+                tts_manager.reload_polly_client()
+                messagebox.showinfo(
+                    "Amazon Polly",
+                    "Amazon Polly configurado com sucesso.",
+                    parent=gui.root,
+                )
+            except APP_RECOVERABLE_ERRORS as exc:
+                show_critical_error(f"Amazon Polly foi salvo, mas nao foi possivel recarregar:\n\n{exc}")
 
         def clear_platform_channel(platform_key: str):
             new_state = get_app_state()
@@ -297,7 +327,7 @@ def main():
                 twitch_bot._status = "erro"
                 print("[APP] token Twitch obtido, mas ainda sem login suficiente para conectar ao chat.")
 
-            except Exception as e:
+            except APP_RECOVERABLE_ERRORS as e:
                 if not is_current_twitch_attempt(attempt_id, cancel_event):
                     twitch_bot._status = "desconectado"
                 else:
@@ -364,7 +394,7 @@ def main():
 
                 youtube_bot.refresh_idle_status()
 
-            except Exception as e:
+            except APP_RECOVERABLE_ERRORS as e:
                 if not is_current_youtube_attempt(attempt_id, cancel_event):
                     youtube_bot.refresh_idle_status()
                 else:
@@ -405,7 +435,7 @@ def main():
 
                 try:
                     twitch_bot.start_public_channel(channel_name or "")
-                except Exception as exc:
+                except APP_RECOVERABLE_ERRORS as exc:
                     twitch_bot._status = "erro"
                     show_critical_error(f"Falha ao monitorar canal Twitch:\n\n{exc}")
                 return
@@ -493,7 +523,7 @@ def main():
                         youtube_bot.stop()
                     youtube_bot.start_public_channel(channel_name)
                     set_youtube_disabled(False)
-                except Exception as exc:
+                except APP_RECOVERABLE_ERRORS as exc:
                     youtube_bot._status = "erro"
                     show_critical_error(f"Falha ao monitorar canal YouTube:\n\n{exc}")
                 return
@@ -551,7 +581,7 @@ def main():
                 try:
                     kick_bot.start_public_channel(channel_name or "")
                     set_kick_enabled(False)
-                except Exception as exc:
+                except APP_RECOVERABLE_ERRORS as exc:
                     kick_bot._status = "erro WebSocket Kick"
                     show_critical_error(f"Falha ao monitorar canal Kick:\n\n{exc}")
                 return
@@ -581,6 +611,7 @@ def main():
             on_toggle_twitch=on_toggle_twitch,
             on_toggle_youtube=on_toggle_youtube,
             on_toggle_kick=on_toggle_kick,
+            on_configure_polly=on_configure_polly,
             get_app_state=get_app_state,
             save_app_state=save_app_state,
         )
@@ -605,5 +636,5 @@ if __name__ == "__main__":
     install_exception_hooks()
     try:
         main()
-    except Exception as exc:
+    except APP_RECOVERABLE_ERRORS as exc:
         report_critical_exception(exc)

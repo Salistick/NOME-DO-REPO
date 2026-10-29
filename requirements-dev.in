@@ -2,3 +2,5 @@
 ruff==0.17.3
 pip-tools==7.6.2
 pip==26.2.2
+# Keep the Windows CLI dependency when Dependabot regenerates locks on Linux.
+colorama==0.4.6

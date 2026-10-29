@@ -1,2 +1,6 @@
 -r requirements.in
 pyinstaller==6.22.3
+# These Windows build dependencies are intentional unconditional inputs.
+# Linux lockfile generators otherwise drop them and break --require-hashes on Windows.
+pefile==2024.8.26
+pywin32-ctypes==0.2.3

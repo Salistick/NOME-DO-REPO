@@ -249,7 +249,9 @@ packaging==26.3 \
 pefile==2024.8.26 \
     --hash=sha256:3ff6c5d8b43e8c37bb6e6dd5085658d658a7a0bdcd20b6a07b1fcfc1c4e9d632 \
     --hash=sha256:76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f
-    # via pyinstaller
+    # via
+    #   -r requirements-build.in
+    #   pyinstaller
 pygame==2.6.1 \
     --hash=sha256:00827aba089355925902d533f9c41e79a799641f03746c50a374dc5c3362e43d \
     --hash=sha256:10e3d2a55f001f6c0a6eb44aa79ea7607091c9352b946692acedb2ac1482f1c9 \
@@ -344,7 +346,9 @@ python-dotenv==1.2.4 \
 pywin32-ctypes==0.2.3 \
     --hash=sha256:8a1513379d709975552d202d942d9837758905c8d01eb82b8bcc30918929e7b8 \
     --hash=sha256:d162dc04946d704503b2edc4d55f3dba5c1d539ead017afa00142c38b9885755
-    # via pyinstaller
+    # via
+    #   -r requirements-build.in
+    #   pyinstaller
 requests==2.34.2 \
     --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0 \
     --hash=sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed

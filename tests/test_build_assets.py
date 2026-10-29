@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from PyInstaller.utils.win32.versioninfo import load_version_info_from_text_file
+from packaging.markers import default_environment
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
@@ -17,7 +18,7 @@ from build_scripts import prepare_windows_build_assets as assets
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def read_lock(name):
+def read_lock_requirements(name):
     content = (ROOT / name).read_text(encoding="utf-8-sig")
     logical_lines = content.replace("\\\n", " ").splitlines()
     requirements = {}
@@ -31,8 +32,52 @@ def read_lock(name):
             raise AssertionError(f"Unpinned dependency in {name}: {line}")
         if not hashes or any(not re.fullmatch(r"[a-f0-9]{64}", value.strip()) for value in hashes):
             raise AssertionError(f"Missing or malformed SHA-256 in {name}: {line}")
-        requirements[canonicalize_name(requirement.name)] = str(requirement.specifier)
+        requirements[canonicalize_name(requirement.name)] = requirement
     return requirements
+
+
+def read_lock(name):
+    return {name: str(requirement.specifier)
+            for name, requirement in read_lock_requirements(name).items()}
+
+
+def windows_dependency_gaps(requirements, python_version):
+    """Validate locked metadata for the target, including transitive extras."""
+    environment = {
+        **default_environment(), "os_name": "nt", "sys_platform": "win32",
+        "platform_system": "Windows", "platform_machine": "AMD64",
+        "implementation_name": "cpython", "platform_python_implementation": "CPython",
+        "python_version": python_version, "python_full_version": python_version + ".0",
+        "implementation_version": python_version + ".0",
+    }
+    requirements = {
+        name: requirement for name, requirement in requirements.items()
+        if requirement.marker is None or requirement.marker.evaluate({**environment, "extra": ""})
+    }
+    pending = [(name, "") for name in requirements]
+    pending.extend((name, extra) for name, requirement in requirements.items()
+                   for extra in requirement.extras)
+    processed = set()
+    gaps = set()
+    while pending:
+        name, extra = pending.pop()
+        if (name, extra) in processed:
+            continue
+        processed.add((name, extra))
+        for value in importlib.metadata.requires(name) or []:
+            dependency = Requirement(value)
+            if dependency.marker and not dependency.marker.evaluate({**environment, "extra": extra}):
+                continue
+            dependency_name = canonicalize_name(dependency.name)
+            locked = requirements.get(dependency_name)
+            if locked is None:
+                gaps.add(f"{name} requires missing {dependency_name}")
+                continue
+            version = next(iter(locked.specifier)).version
+            if not dependency.specifier.contains(version, prereleases=True):
+                gaps.add(f"{name} requires {dependency}, locked {locked}")
+            pending.extend((dependency_name, child_extra) for child_extra in dependency.extras)
+    return sorted(gaps)
 
 
 class BuildAssetsTests(unittest.TestCase):
@@ -46,6 +91,46 @@ class BuildAssetsTests(unittest.TestCase):
         for name, specifier in development.items():
             with self.subTest(package=name):
                 self.assertEqual("==" + importlib.metadata.version(name), specifier)
+
+    def test_windows_dependencies_are_unconditional_direct_inputs(self):
+        for filename, expected in (("requirements-build.in", ("pefile", "pywin32-ctypes")),
+                                   ("requirements-dev.in", ("colorama",))):
+            direct = {}
+            for line in (ROOT / filename).read_text(encoding="utf-8-sig").splitlines():
+                line = line.strip()
+                if line and not line.startswith(("#", "-")):
+                    requirement = Requirement(line)
+                    direct[canonicalize_name(requirement.name)] = requirement
+            for name in expected:
+                with self.subTest(filename=filename, dependency=name):
+                    self.assertIn(name, direct)
+                    self.assertIsNone(direct[name].marker)
+                    self.assertEqual(len(direct[name].specifier), 1)
+                    self.assertEqual(next(iter(direct[name].specifier)).operator, "==")
+
+    def test_locks_close_all_windows_dependencies_for_supported_python_versions(self):
+        for filename in ("requirements.txt", "requirements-build.txt", "requirements-dev.txt"):
+            requirements = read_lock_requirements(filename)
+            for version in ("3.12", "3.13"):
+                with self.subTest(lock=filename, python=version):
+                    self.assertEqual(windows_dependency_gaps(requirements, version), [])
+
+    def test_windows_closure_detects_the_packages_dropped_by_linux_regeneration(self):
+        requirements = read_lock_requirements("requirements-dev.txt")
+        for name in ("pefile", "pywin32-ctypes", "colorama"):
+            with self.subTest(removed=name):
+                incomplete = {key: value for key, value in requirements.items() if key != name}
+                gaps = windows_dependency_gaps(incomplete, "3.12")
+                self.assertTrue(any("requires missing " + name in gap for gap in gaps), gaps)
+
+    def test_linux_only_pins_do_not_count_as_windows_dependencies(self):
+        requirements = read_lock_requirements("requirements-dev.txt")
+        for name in ("pefile", "pywin32-ctypes", "colorama"):
+            with self.subTest(linux_only=name):
+                incompatible = dict(requirements)
+                incompatible[name] = Requirement(f"{name}{requirements[name].specifier}; sys_platform == 'linux'")
+                gaps = windows_dependency_gaps(incompatible, "3.13")
+                self.assertTrue(any("requires missing " + name in gap for gap in gaps), gaps)
 
     def test_generated_version_resource_is_readable_by_pyinstaller(self):
         with tempfile.TemporaryDirectory() as directory:

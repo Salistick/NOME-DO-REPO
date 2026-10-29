@@ -22,7 +22,7 @@ Ao mudar de PC ou perfil Windows, faça login e configure o Polly novamente se n
 - Bloqueio de instância antes de carregar/migrar credenciais e reconexões sem duplicar monitores.
 - Leitura autenticada do YouTube por API oficial, dependências fixadas com hashes e checks automatizados.
 
-A validação local passou **138 testes**, abertura do executável e um ciclo isolado de instalação, upgrade e desinstalação com preservação de dados. Contas reais e síntese paga não foram usadas nesses testes.
+A validação local passou **142 testes**, abertura do executável e um ciclo isolado de instalação, upgrade e desinstalação com preservação de dados. Contas reais e síntese paga não foram usadas nesses testes.
 
 ## Executar pelo código
 
@@ -96,6 +96,8 @@ Os testes simulam rede, AWS e reprodução; não precisam de contas nem enviam m
 Para validar as plataformas com contas e áudio reais, siga [TESTES_INTEGRACAO.md](TESTES_INTEGRACAO.md).
 
 Dependências diretas são mantidas nos arquivos `requirements*.in`; os `.txt` incluem versões transitivas fixadas e hashes. Para regenerar os locks e validar, execute `build_scripts/refresh_dependency_locks.ps1`. O repositório inclui configuração do Dependabot para propor atualizações semanais, sujeitas aos checks.
+
+As dependências de build necessárias no Windows (`pefile`, `pywin32-ctypes` e `colorama`) também têm pins diretos nos arquivos `.in`. Isso impede que uma regeneração do lock feita no Linux, como a do Dependabot, descarte pacotes necessários para instalar o ambiente Windows com hashes obrigatórios.
 
 ## Build e atualização
 

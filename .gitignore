@@ -22,6 +22,7 @@ __pycache__/
 build/
 dist/
 build_assets/
+build_validation/
 TTSLive.exe
 TTSLiveInstaller.exe
 

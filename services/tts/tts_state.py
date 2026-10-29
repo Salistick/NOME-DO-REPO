@@ -1,7 +1,26 @@
+import math
 import time
 from dataclasses import dataclass, field
 
 SUPPORTED_TTS_PLATFORMS = ("twitch", "youtube", "kick")
+
+
+def _valid_float(value, fallback: float, *, allow_zero: bool = True) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    if not math.isfinite(parsed) or parsed < 0 or (parsed == 0 and not allow_zero):
+        return fallback
+    return parsed
+
+
+def _valid_positive_int(value, fallback: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    return parsed if parsed > 0 else fallback
 
 
 @dataclass
@@ -19,12 +38,15 @@ class PlatformTTSConfig:
 
     @classmethod
     def from_dict(cls, data: dict | None, fallback: "PlatformTTSConfig | None" = None) -> "PlatformTTSConfig":
-        data = data or {}
+        data = data if isinstance(data, dict) else {}
         fallback = fallback or cls()
+        mode_sub_only = data.get("mode_sub_only", fallback.mode_sub_only)
+        if isinstance(mode_sub_only, str):
+            mode_sub_only = mode_sub_only.strip().lower() in {"1", "true", "yes", "sim", "on"}
         return cls(
-            mode_sub_only=bool(data.get("mode_sub_only", fallback.mode_sub_only)),
-            user_cooldown_seconds=float(data.get("user_cooldown_seconds", fallback.user_cooldown_seconds)),
-            max_words=int(data.get("max_words", fallback.max_words)),
+            mode_sub_only=bool(mode_sub_only),
+            user_cooldown_seconds=_valid_float(data.get("user_cooldown_seconds"), fallback.user_cooldown_seconds),
+            max_words=_valid_positive_int(data.get("max_words"), fallback.max_words),
         )
 
 
@@ -69,7 +91,7 @@ class TTSState:
 
     @classmethod
     def from_persisted_dict(cls, data: dict | None) -> "TTSState":
-        data = data or {}
+        data = data if isinstance(data, dict) else {}
         fallback_config = PlatformTTSConfig.from_dict(data)
         raw_platforms = data.get("platforms") if isinstance(data.get("platforms"), dict) else {}
         platform_configs = {}
@@ -79,7 +101,7 @@ class TTSState:
             platform_configs[platform] = PlatformTTSConfig.from_dict(raw_config, fallback_config)
 
         return cls(
-            rate_seconds=float(data.get("rate_seconds", 2.5)),
+            rate_seconds=_valid_float(data.get("rate_seconds"), 2.5, allow_zero=False),
             platform_configs=platform_configs,
             audio_output_device=str(data.get("audio_output_device", "") or "").strip(),
             paused=False,
@@ -121,7 +143,7 @@ class TTSState:
         platform: str = "",
         now: float | None = None,
     ) -> tuple[bool, float]:
-        now = now if now is not None else time.time()
+        now = now if now is not None else time.monotonic()
         platform_config = self.get_platform_config(platform)
         key = self._user_cooldown_key(username, platform)
 
@@ -137,7 +159,7 @@ class TTSState:
         return False, remaining
 
     def mark_user_audio_time(self, username: str, platform: str = "", now: float | None = None) -> None:
-        now = now if now is not None else time.time()
+        now = now if now is not None else time.monotonic()
         self.last_user_audio_time[self._user_cooldown_key(username, platform)] = now
 
     @staticmethod

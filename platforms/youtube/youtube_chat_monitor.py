@@ -1,4 +1,3 @@
-import signal
 import threading
 import time
 from collections.abc import Callable
@@ -78,12 +77,15 @@ class YouTubeChatMonitor:
         self._close_chat()
 
         try:
-            if self._thread and self._thread.is_alive():
+            if self._thread and self._thread.is_alive() and self._thread is not threading.current_thread():
                 self._thread.join(timeout=3.0)
         except RuntimeError as exc:
             print(f"[YOUTUBE CHAT] erro ao aguardar thread: {exc}")
 
-        self._thread = None
+        # Keep ownership of a worker that is still leaving a blocking get().
+        # start() must not launch a second worker on the same monitor.
+        if self._thread and not self._thread.is_alive():
+            self._thread = None
 
     def is_running(self) -> bool:
         return self._running and self._thread is not None and self._thread.is_alive()
@@ -111,6 +113,8 @@ class YouTubeChatMonitor:
                     had_messages = False
 
                     for item in items:
+                        if not self._running:
+                            break
                         had_messages = True
                         parsed = self._parse_item(item)
                         if parsed:
@@ -156,16 +160,9 @@ class YouTubeChatMonitor:
             self._close_chat()
 
     def _create_chat_safe(self):
-        original_signal = signal.signal
-
-        def _dummy_signal(*args, **kwargs):
-            return None
-
-        try:
-            signal.signal = _dummy_signal
-            return pytchat.create(video_id=self.video_id)
-        finally:
-            signal.signal = original_signal
+        # pytchat can disable its SIGINT handler for background workers.
+        # Replacing signal.signal would affect every thread in the process.
+        return pytchat.create(video_id=self.video_id, interruptable=False)
 
     def _restart_chat(self):
         self._close_chat()

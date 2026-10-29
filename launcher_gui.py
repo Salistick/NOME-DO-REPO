@@ -55,6 +55,8 @@ class RoundedToggleButton(tk.Canvas):
         self._draw()
 
     def set_state(self, is_on: bool):
+        if self.is_on == is_on:
+            return
         self.is_on = is_on
         self._draw()
 
@@ -151,6 +153,7 @@ class LauncherGUI:
         on_configure_polly,
         get_app_state,
         save_app_state,
+        on_shutdown=None,
     ):
         self.twitch_bot = twitch_bot
         self.youtube_bot = youtube_bot
@@ -162,6 +165,7 @@ class LauncherGUI:
         self.on_configure_polly = on_configure_polly
         self.get_app_state = get_app_state
         self.save_app_state = save_app_state
+        self.on_shutdown = on_shutdown
 
         self.root = tk.Tk()
         self.root.title("TTS Live")
@@ -950,22 +954,25 @@ class LauncherGUI:
         return (status or "desconectado").replace("_", " ")
 
     def _on_close(self):
-        self._save_main_window_geometry()
+        if self.on_shutdown:
+            self.on_shutdown()
+        try:
+            self._save_main_window_geometry()
+        except GUI_RECOVERABLE_ERRORS as exc:
+            print(f"[GUI] erro ao salvar geometria: {exc}")
 
         try:
-            if self.twitch_bot.is_running():
-                self.twitch_bot.stop()
+            self.twitch_bot.stop()
         except GUI_RECOVERABLE_ERRORS as exc:
             print(f"[GUI] erro ao encerrar Twitch: {exc}")
 
         try:
-            if self.youtube_bot.is_running():
-                self.youtube_bot.stop()
+            self.youtube_bot.stop()
         except GUI_RECOVERABLE_ERRORS as exc:
             print(f"[GUI] erro ao encerrar YouTube: {exc}")
 
         try:
-            if self.kick_bot and self.kick_bot.is_running():
+            if self.kick_bot:
                 self.kick_bot.stop()
         except GUI_RECOVERABLE_ERRORS as exc:
             print(f"[GUI] erro ao encerrar Kick: {exc}")

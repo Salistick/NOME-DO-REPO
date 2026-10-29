@@ -11,6 +11,13 @@ class KickChatSender:
         self.broadcaster_user_id_provider = broadcaster_user_id_provider
 
     def send_message(self, text: str) -> bool:
+        try:
+            return self._send_message(text)
+        except (RuntimeError, OSError, ValueError, TypeError, requests.RequestException) as exc:
+            print(f"[KICK SENDER] Falha ao enviar mensagem: {exc}")
+            return False
+
+    def _send_message(self, text: str) -> bool:
         text = " ".join((text or "").split()).strip()
         if not text:
             return False

@@ -7,7 +7,7 @@ from config import TOKEN_CACHE_FILE, TWITCH_CHANNEL, has_twitch_bot_sender_confi
 
 from .twitch_auth import TwitchAuth
 from .twitch_cache import TokenCache
-from .twitch_irc import TwitchIRCClient
+from .twitch_irc import TwitchIRCClient, parse_badges
 from .twitch_sender import TwitchChatSender
 
 TWITCH_BOT_RECOVERABLE_ERRORS = (
@@ -34,6 +34,7 @@ class TwitchBot:
         self._running = False
         self._status = "desconectado"
         self._lock = threading.Lock()
+        self._stop_event = threading.Event()
 
         self._token_data: dict | None = None
         self._message_callback: Callable[[dict], None] | None = None
@@ -56,7 +57,7 @@ class TwitchBot:
         return self._status
 
     def is_running(self) -> bool:
-        return self._running
+        return bool(self._running or (self._thread and self._thread.is_alive()))
 
     def is_public_mode(self) -> bool:
         return self._public_mode
@@ -76,6 +77,7 @@ class TwitchBot:
                 return
 
             self._running = True
+            self._stop_event = threading.Event()
             self._manual_stop = False
             self._should_reconnect = True
             self._status = "conectando"
@@ -105,6 +107,7 @@ class TwitchBot:
                 return
 
             self._running = True
+            self._stop_event = threading.Event()
             self._manual_stop = False
             self._should_reconnect = True
             self._status = "conectando Twitch sem login"
@@ -129,6 +132,7 @@ class TwitchBot:
     def stop(self):
 
         with self._lock:
+            self._stop_event.set()
             self._running = False
             self._manual_stop = True
             self._should_reconnect = False
@@ -151,14 +155,19 @@ class TwitchBot:
         except RuntimeError as exc:
             print(f"[TWITCH BOT] erro ao aguardar thread: {exc}")
 
-        self.client = None
+        thread_alive = bool(self._thread and self._thread.is_alive())
+        if not thread_alive:
+            self.client = None
         self._token_data = None
         self._message_callback = None
         self._public_channel = ""
         self._public_mode = False
         self._clear_connection_announcements()
-        self._thread = None
-        self._status = "desconectado"
+        # Keep the worker reference while a connect/OAuth call is still unwinding.
+        # A new start must not revive the old worker with a fresh stop event.
+        if not thread_alive:
+            self._thread = None
+        self._status = "desconectando" if thread_alive else "desconectado"
 
     def disconnect_and_forget(self):
 
@@ -194,8 +203,7 @@ class TwitchBot:
                 print("[TWITCH BOT] Conta bot da Twitch nao configurada no .env.")
                 return False
 
-            self.sender.send_message(channel, clean)
-            return True
+            return bool(self.sender.send_message(channel, clean))
 
         except TWITCH_BOT_RECOVERABLE_ERRORS as exc:
             print(f"[TWITCH BOT] Falha ao enviar mensagem: {exc}")
@@ -217,7 +225,10 @@ class TwitchBot:
                 # em reconnects, sempre revalida/renova token antes de usar
                 if not self._public_mode and (consecutive_failures > 0 or not self._token_data):
                     self._status = "reconectando"
-                    self._token_data = self.auth.get_valid_token()
+                    self._token_data = self.auth.get_valid_token(cancel_event=self._stop_event)
+
+                if self._stop_event.is_set():
+                    break
 
                 started_at = time.time()
 
@@ -286,6 +297,9 @@ class TwitchBot:
             retry_delay = min(retry_delay + 2, 15)
 
         self._running = False
+        if self.client:
+            self.client.stop()
+            self.client = None
 
         if self._manual_stop or not self._should_reconnect and self._status != "erro":
             self._status = "desconectado"
@@ -312,6 +326,9 @@ class TwitchBot:
             )
 
             self.client.connect()
+            if self._stop_event.is_set():
+                self.client.stop()
+                return
 
             self._status = f"monitorando #{channel} sem login"
             print(f"Conectado ao chat da Twitch sem login. Monitorando #{channel}...")
@@ -337,6 +354,9 @@ class TwitchBot:
         )
 
         self.client.connect()
+        if self._stop_event.is_set():
+            self.client.stop()
+            return
 
         self._status = f"monitorando #{channel}"
 
@@ -358,6 +378,8 @@ class TwitchBot:
         try:
 
             role = message.get("role", "viewer")
+            tags = message.get("tags") or {}
+            badges = parse_badges(tags.get("badges", ""))
 
             payload = {
                 "platform": "twitch",
@@ -366,8 +388,8 @@ class TwitchBot:
                 "display_name": message.get("display_name", ""),
                 "message": message.get("message", ""),
                 "role": role,
-                "is_mod": role == "moderator",
-                "is_sub": role == "subscriber",
+                "is_mod": role == "moderator" or tags.get("mod") == "1" or "moderator" in badges,
+                "is_sub": role == "subscriber" or tags.get("subscriber") == "1" or "subscriber" in badges,
                 "is_broadcaster": role == "broadcaster",
                 "send_chat": self.send_chat_message,
             }

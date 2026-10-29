@@ -1,13 +1,11 @@
-import json
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import requests
 
-YOUTUBE_LIVE_CHAT_STREAM_URL = "https://www.googleapis.com/youtube/v3/liveChat/messages/stream"
 YOUTUBE_LIVE_CHAT_LIST_URL = "https://www.googleapis.com/youtube/v3/liveChat/messages"
 YOUTUBE_API_CHAT_RECOVERABLE_ERRORS = (
     RuntimeError,
@@ -19,11 +17,12 @@ YOUTUBE_API_CHAT_RECOVERABLE_ERRORS = (
 )
 
 
-class YouTubeStreamFallbackError(RuntimeError):
-    pass
-
-
 class YouTubeApiChatMonitor:
+    """Read the documented REST list endpoint at the server's polling interval.
+
+    YouTube's lower-latency streamList guide uses gRPC. No guessed HTTP stream
+    endpoint is attempted; a gRPC adapter can be added independently later.
+    """
     def __init__(
         self,
         live_chat_id: str,
@@ -47,8 +46,6 @@ class YouTubeApiChatMonitor:
         self._stop_event = threading.Event()
         self._page_token: str | None = None
         self._created_at = time.time()
-        self._use_poll_fallback = False
-        self._stream_buffer = ""
 
     def start(self):
         with self._lock:
@@ -72,14 +69,17 @@ class YouTubeApiChatMonitor:
         with self._lock:
             self._running = False
             self._stop_event.set()
+            worker = self._thread
 
         try:
-            if self._thread and self._thread.is_alive():
-                self._thread.join(timeout=3.0)
+            if worker and worker.is_alive() and worker is not threading.current_thread():
+                worker.join(timeout=3.0)
         except RuntimeError as exc:
             print(f"[YOUTUBE API CHAT] erro ao aguardar thread: {exc}")
 
-        self._thread = None
+        with self._lock:
+            if self._thread is worker and worker and not worker.is_alive():
+                self._thread = None
 
     def is_running(self) -> bool:
         return self._running and self._thread is not None and self._thread.is_alive()
@@ -90,16 +90,12 @@ class YouTubeApiChatMonitor:
         try:
             while self._running and not self._stop_event.is_set():
                 try:
-                    if self._use_poll_fallback:
-                        self._poll_once()
-                    else:
-                        self._consume_stream()
+                    self._poll_once()
 
                     if not self._running or self._stop_event.is_set():
                         break
 
                     consecutive_failures = 0
-                    self._sleep_interruptible(self.reconnect_delay_seconds)
 
                 except YOUTUBE_API_CHAT_RECOVERABLE_ERRORS as exc:
                     if not self._running or self._stop_event.is_set():
@@ -107,12 +103,6 @@ class YouTubeApiChatMonitor:
 
                     consecutive_failures += 1
                     print(f"[YOUTUBE API CHAT] Erro no monitor: {exc}")
-
-                    if isinstance(exc, YouTubeStreamFallbackError):
-                        self._use_poll_fallback = True
-                        consecutive_failures = 0
-                        print("[YOUTUBE API CHAT] Stream indisponivel; usando listagem com intervalo oficial.")
-                        continue
 
                     if consecutive_failures >= self.max_consecutive_failures:
                         print("[YOUTUBE API CHAT] Falhas repetidas. Encerrando monitor para forcar nova busca.")
@@ -122,65 +112,6 @@ class YouTubeApiChatMonitor:
                     self._sleep_interruptible(min(30.0, self.reconnect_delay_seconds * consecutive_failures))
         finally:
             self._running = False
-
-    def _consume_stream(self):
-        token = self._get_access_token()
-        params = self._build_params(max_results=self.max_results)
-        if self._page_token:
-            params["pageToken"] = self._page_token
-
-        response = requests.get(
-            YOUTUBE_LIVE_CHAT_STREAM_URL,
-            params=params,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json",
-            },
-            stream=True,
-            timeout=(5, 70),
-        )
-
-        if response.status_code in {400, 404, 405, 501}:
-            raise YouTubeStreamFallbackError(
-                f"streamList indisponivel: status {response.status_code}"
-            )
-
-        if response.status_code != 200:
-            raise RuntimeError(f"YouTube streamList retornou status {response.status_code}: {response.text[:300]}")
-
-        self._stream_buffer = ""
-        for chunk in response.iter_content(chunk_size=65536, decode_unicode=True):
-            if not self._running or self._stop_event.is_set():
-                break
-            if not chunk:
-                continue
-            if isinstance(chunk, bytes):
-                chunk = chunk.decode("utf-8", errors="ignore")
-            self._handle_stream_chunk(chunk)
-
-    def _handle_stream_chunk(self, chunk: str):
-        self._stream_buffer += chunk
-        decoder = json.JSONDecoder()
-
-        while self._stream_buffer:
-            stripped = self._stream_buffer.lstrip()
-            if not stripped:
-                self._stream_buffer = ""
-                return
-
-            skipped = len(self._stream_buffer) - len(stripped)
-            if skipped:
-                self._stream_buffer = stripped
-
-            try:
-                payload, index = decoder.raw_decode(self._stream_buffer)
-            except json.JSONDecodeError:
-                if len(self._stream_buffer) > 1024 * 1024:
-                    self._stream_buffer = self._stream_buffer[-8192:]
-                return
-
-            self._handle_payload(payload)
-            self._stream_buffer = self._stream_buffer[index:]
 
     def _poll_once(self):
         token = self._get_access_token()
@@ -198,14 +129,20 @@ class YouTubeApiChatMonitor:
             timeout=(5, 20),
         )
 
-        if response.status_code != 200:
-            raise RuntimeError(f"YouTube liveChatMessages.list retornou status {response.status_code}: {response.text[:300]}")
+        try:
+            if response.status_code != 200:
+                raise RuntimeError(f"YouTube liveChatMessages.list retornou status {response.status_code}: {response.text[:300]}")
 
-        payload = response.json()
-        self._handle_payload(payload)
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Resposta do chat YouTube deve ser um objeto JSON.")
+            self._handle_payload(payload)
 
-        interval_ms = int(payload.get("pollingIntervalMillis") or 4000)
-        self._sleep_interruptible(max(1.0, interval_ms / 1000.0))
+            interval_ms = int(payload.get("pollingIntervalMillis") or 4000)
+        finally:
+            response.close()
+        if self._running and not self._stop_event.is_set():
+            self._sleep_interruptible(max(1.0, interval_ms / 1000.0))
 
     def _handle_payload(self, payload: dict):
         if not isinstance(payload, dict):
@@ -222,6 +159,8 @@ class YouTubeApiChatMonitor:
             return
 
         for item in items:
+            if not self._running or self._stop_event.is_set():
+                break
             parsed = self._parse_item(item)
             if not parsed:
                 continue
@@ -316,7 +255,7 @@ class YouTubeApiChatMonitor:
 
         try:
             normalized = published_at.replace("Z", "+00:00")
-            timestamp = datetime.fromisoformat(normalized).astimezone(timezone.utc).timestamp()
+            timestamp = datetime.fromisoformat(normalized).astimezone(UTC).timestamp()
         except (TypeError, ValueError):
             return True
 
@@ -341,6 +280,4 @@ class YouTubeApiChatMonitor:
         return token
 
     def _sleep_interruptible(self, seconds: float):
-        deadline = time.time() + max(0.1, seconds)
-        while time.time() < deadline and self._running and not self._stop_event.is_set():
-            time.sleep(min(0.25, deadline - time.time()))
+        self._stop_event.wait(max(0.1, seconds))

@@ -1,4 +1,5 @@
 import uuid
+from contextlib import closing
 from pathlib import Path
 
 from botocore.exceptions import ClientError
@@ -52,8 +53,12 @@ class PollyClient:
         if not audio_stream:
             raise RuntimeError("Polly não retornou áudio.")
 
-        with open(output_path, "wb") as f:
-            f.write(audio_stream.read())
+        try:
+            with closing(audio_stream), open(output_path, "wb") as f:
+                f.writelines(iter(lambda: audio_stream.read(64 * 1024), b""))
+        except Exception:
+            output_path.unlink(missing_ok=True)
+            raise
 
         return output_path
 

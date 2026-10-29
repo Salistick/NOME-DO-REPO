@@ -1,13 +1,16 @@
 ﻿from __future__ import annotations
 
+import math
 import queue
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from config import TTS_AUDIO_DIR, TTS_CONFIG_FILE
-from services.tts.audio_player import AudioPlayer
+from services.tts.audio_player import MAX_PENDING_AUDIO, AudioPlayer
 from services.tts.command_rules import (
     can_use_sub_only,
     is_admin,
@@ -31,6 +34,8 @@ TTS_RECOVERABLE_ERRORS = (
     TypeError,
     KeyError,
     AttributeError,
+    BotoCoreError,
+    ClientError,
 )
 
 
@@ -41,6 +46,7 @@ class _SynthTask:
     text: str = field(compare=False)
     player_priority: bool = field(compare=False, default=False)
     bypass_state: bool = field(compare=False, default=False)
+    generation: int = field(compare=False, default=0)
 
 
 class TTSManager:
@@ -65,9 +71,10 @@ class TTSManager:
             self.state.audio_output_device = active_audio_device
             self._save_config()
 
-        self.lock = threading.Lock()
-        self._synth_queue: queue.PriorityQueue[_SynthTask] = queue.PriorityQueue()
+        self.lock = threading.RLock()
+        self._synth_queue: queue.PriorityQueue[_SynthTask] = queue.PriorityQueue(maxsize=MAX_PENDING_AUDIO)
         self._synth_sequence = 0
+        self._synth_generation = 0
         self._synth_running = True
         self._synth_thread = threading.Thread(
             target=self._run_synth_queue,
@@ -280,7 +287,7 @@ class TTSManager:
             print(f"[TTS] valor numerico invalido: {value!r} ({exc})")
             return None
 
-        if parsed < 0 or (parsed == 0 and not allow_zero):
+        if not math.isfinite(parsed) or parsed < 0 or (parsed == 0 and not allow_zero):
             return None
 
         return parsed
@@ -312,7 +319,7 @@ class TTSManager:
             return
 
         username = payload.get("username")
-        now = time.time()
+        now = time.monotonic()
 
         ok, _remaining = self.state.can_user_send_audio(username, platform, now)
 
@@ -329,9 +336,11 @@ class TTSManager:
 
         tts_text = build_tts_text(payload.get("display_name", "usuario"), text)
 
-        self._queue_audio(tts_text, priority=False)
-
-        self.state.mark_user_audio_time(username, platform, now)
+        with self.lock:
+            now = time.monotonic()
+            ok, _remaining = self.state.can_user_send_audio(username, platform, now)
+            if ok and self._queue_audio(tts_text, priority=False):
+                self.state.mark_user_audio_time(username, platform, now)
 
     # ==================================
     # !mm
@@ -500,11 +509,11 @@ class TTSManager:
 
     def _handle_stop(self, payload):
 
-        self.state.stopped = True
-        self.state.paused = False
-
-        self._clear_pending_audio_queue()
-        self.player.stop()
+        with self.lock:
+            self.state.stopped = True
+            self.state.paused = False
+            self._clear_pending_audio_queue()
+            self.player.stop()
 
         msg = "Fila limpa e player parado"
 
@@ -524,10 +533,10 @@ class TTSManager:
             self._reply(payload, msg)
             return
 
-        self.state.paused = False
-        self.state.stopped = False
-
-        self.player.resume()
+        with self.lock:
+            self.state.paused = False
+            self.state.stopped = False
+            self.player.resume()
 
         msg = "Player retomado"
 
@@ -574,26 +583,35 @@ class TTSManager:
         text,
         priority=False,
         bypass_state: bool = False,
-    ):
+    ) -> bool:
         text = (text or "").strip()
         if not text:
-            return
+            return False
 
         with self.lock:
+            if not self._synth_running or (self.state.stopped and not bypass_state):
+                return False
             self._synth_sequence += 1
             sequence = self._synth_sequence
-
-        rank = 0 if priority else 1
-
-        self._synth_queue.put(
-            _SynthTask(
-                priority_rank=rank,
-                sequence=sequence,
-                text=text,
-                player_priority=priority,
-                bypass_state=bypass_state,
-            )
-        )
+            # Keep one slot available for administrative speech while paused.
+            if not priority and self._synth_queue.qsize() >= MAX_PENDING_AUDIO - 1:
+                print("[TTS] fila de sintese cheia; mensagem descartada.")
+                return False
+            try:
+                self._synth_queue.put_nowait(
+                    _SynthTask(
+                        priority_rank=0 if priority else 1,
+                        sequence=sequence,
+                        text=text,
+                        player_priority=priority,
+                        bypass_state=bypass_state,
+                        generation=self._synth_generation,
+                    )
+                )
+            except queue.Full:
+                print("[TTS] fila de sintese cheia; mensagem descartada.")
+                return False
+        return True
 
     def _run_synth_queue(self):
         while self._synth_running:
@@ -603,14 +621,32 @@ class TTSManager:
                 continue
 
             try:
+                # Apply backpressure before making another paid synthesis request.
+                while self._synth_running:
+                    with self.lock:
+                        if task.generation != self._synth_generation:
+                            break
+                        if not task.player_priority:
+                            task = self._promote_waiting_priority(task)
+                    playback_limit = MAX_PENDING_AUDIO if task.player_priority else MAX_PENDING_AUDIO - 1
+                    if self.player.queue_length() < playback_limit:
+                        break
+                    time.sleep(0.1)
+                with self.lock:
+                    if not self._synth_running or task.generation != self._synth_generation:
+                        continue
                 with self._polly_lock:
                     polly = self.polly
                 audio_path = polly.synthesize(task.text)
-                self.player.enqueue(
-                    audio_path,
-                    priority=task.player_priority,
-                    bypass_state=task.bypass_state,
-                )
+                with self.lock:
+                    if not self._synth_running or task.generation != self._synth_generation:
+                        audio_path.unlink(missing_ok=True)
+                    else:
+                        self.player.enqueue(
+                            audio_path,
+                            priority=task.player_priority,
+                            bypass_state=task.bypass_state,
+                        )
             except TTS_RECOVERABLE_ERRORS as e:
                 print("[TTS] erro gerando audio:", e)
             finally:
@@ -619,7 +655,26 @@ class TTSManager:
                 except ValueError as exc:
                     print(f"[TTS] fila de audio com task_done invalido: {exc}")
 
+    def _promote_waiting_priority(self, task: _SynthTask) -> _SynthTask:
+        """Allow admin speech to pass a normal item blocked by paused playback.
+
+        The caller holds self.lock. Swap only after taking a queued item, which
+        frees the capacity required to put the original task back.
+        """
+        try:
+            candidate = self._synth_queue.get_nowait()
+        except queue.Empty:
+            return task
+        if candidate.player_priority:
+            self._synth_queue.put_nowait(task)
+            self._synth_queue.task_done()
+            return candidate
+        self._synth_queue.put_nowait(candidate)
+        self._synth_queue.task_done()
+        return task
+
     def _clear_pending_audio_queue(self):
+        self._synth_generation += 1
         while True:
             try:
                 self._synth_queue.get_nowait()
@@ -636,7 +691,9 @@ class TTSManager:
 
     def shutdown(self):
 
-        self._synth_running = False
-        self._clear_pending_audio_queue()
-
+        with self.lock:
+            self._synth_running = False
+            self._clear_pending_audio_queue()
+        if self._synth_thread is not threading.current_thread():
+            self._synth_thread.join(timeout=2.0)
         self.player.shutdown()

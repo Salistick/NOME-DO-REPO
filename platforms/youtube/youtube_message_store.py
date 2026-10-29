@@ -1,19 +1,23 @@
 ﻿import json
+import math
 import threading
 import time
+from collections import deque
 from pathlib import Path
+
+from .youtube_json import atomic_write_json
 
 
 class YouTubeMessageStore:
     def __init__(self, filepath: Path, max_messages: int = 5000):
         self.filepath = Path(filepath)
-        self.max_messages = max_messages
+        self.max_messages = max(1, int(max_messages))
 
         self._lock = threading.Lock()
         self._loaded = False
 
-        self._messages: list[dict] = []
-        self._index_by_id: dict[str, int] = {}
+        self._messages: deque[dict] = deque()
+        self._index_by_id: dict[str, dict] = {}
         self._seen_ids: set[str] = set()
 
         self._dirty = False
@@ -26,6 +30,14 @@ class YouTubeMessageStore:
         return {
             "messages": []
         }
+
+    @staticmethod
+    def _normalize_seen_at(value) -> float:
+        try:
+            parsed = float(value or time.time())
+        except (TypeError, ValueError):
+            return time.time()
+        return parsed if math.isfinite(parsed) and parsed > 0 else time.time()
 
     def _load_from_disk(self) -> list[dict]:
         if not self.filepath.exists():
@@ -58,7 +70,7 @@ class YouTubeMessageStore:
                     "message_id": message_id,
                     "author_name": str(item.get("author_name") or "").strip(),
                     "message_text": str(item.get("message_text") or "").strip(),
-                    "seen_at": float(item.get("seen_at") or time.time()),
+                    "seen_at": self._normalize_seen_at(item.get("seen_at")),
                 }
             )
 
@@ -68,31 +80,27 @@ class YouTubeMessageStore:
         return normalized
 
     def _save_to_disk(self) -> None:
-        self.filepath.parent.mkdir(parents=True, exist_ok=True)
-
         payload = {
-            "messages": self._messages,
+            "messages": list(self._messages),
         }
-
-        with open(self.filepath, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
+        atomic_write_json(self.filepath, payload)
 
     def _rebuild_indexes(self) -> None:
         self._index_by_id.clear()
         self._seen_ids.clear()
 
-        for idx, item in enumerate(self._messages):
+        for item in self._messages:
             message_id = item.get("message_id")
             if not message_id:
                 continue
-            self._index_by_id[message_id] = idx
+            self._index_by_id[message_id] = item
             self._seen_ids.add(message_id)
 
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
 
-        self._messages = self._load_from_disk()
+        self._messages = deque(self._load_from_disk())
         self._rebuild_indexes()
 
         self._loaded = True
@@ -104,8 +112,13 @@ class YouTubeMessageStore:
         if len(self._messages) <= self.max_messages:
             return
 
-        self._messages = self._messages[-self.max_messages:]
-        self._rebuild_indexes()
+        while len(self._messages) > self.max_messages:
+            removed = self._messages.popleft()
+            message_id = removed["message_id"]
+            # A malformed old cache may contain the same ID more than once.
+            if self._index_by_id.get(message_id) is removed:
+                self._index_by_id.pop(message_id, None)
+                self._seen_ids.discard(message_id)
 
     def _flush_if_needed_unlocked(self, force: bool = False) -> None:
         if not self._dirty:
@@ -132,7 +145,7 @@ class YouTubeMessageStore:
         with self._lock:
             self._ensure_loaded()
             return {
-                "messages": list(self._messages),
+                "messages": [dict(item) for item in self._messages],
             }
 
     def save(self, data: dict) -> None:
@@ -155,14 +168,14 @@ class YouTubeMessageStore:
                         "message_id": message_id,
                         "author_name": str(item.get("author_name") or "").strip(),
                         "message_text": str(item.get("message_text") or "").strip(),
-                        "seen_at": float(item.get("seen_at") or time.time()),
+                        "seen_at": self._normalize_seen_at(item.get("seen_at")),
                     }
                 )
 
             if len(normalized) > self.max_messages:
                 normalized = normalized[-self.max_messages:]
 
-            self._messages = normalized
+            self._messages = deque(normalized)
             self._rebuild_indexes()
             self._loaded = True
 
@@ -172,7 +185,7 @@ class YouTubeMessageStore:
 
     def clear(self) -> None:
         with self._lock:
-            self._messages = []
+            self._messages.clear()
             self._index_by_id.clear()
             self._seen_ids.clear()
             self._loaded = True
@@ -208,10 +221,10 @@ class YouTubeMessageStore:
         with self._lock:
             self._ensure_loaded()
 
-            idx = self._index_by_id.get(message_id)
+            existing = self._index_by_id.get(message_id)
 
-            if idx is not None:
-                self._messages[idx]["seen_at"] = time.time()
+            if existing is not None:
+                existing["seen_at"] = time.time()
                 self._dirty = True
                 self._pending_writes += 1
                 self._flush_if_needed_unlocked()
@@ -226,7 +239,7 @@ class YouTubeMessageStore:
                 }
             )
 
-            self._index_by_id[message_id] = len(self._messages) - 1
+            self._index_by_id[message_id] = self._messages[-1]
             self._seen_ids.add(message_id)
 
             self._trim_to_limit()
@@ -250,6 +263,7 @@ class YouTubeMessageStore:
             if message_id in seen_ids:
                 continue
 
+            seen_ids.add(message_id)
             new_messages.append(message)
 
         return new_messages
@@ -277,7 +291,7 @@ class YouTubeMessageStore:
                     }
                 )
 
-                self._index_by_id[message_id] = len(self._messages) - 1
+                self._index_by_id[message_id] = self._messages[-1]
                 self._seen_ids.add(message_id)
                 changed = True
 

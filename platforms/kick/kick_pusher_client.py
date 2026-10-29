@@ -60,13 +60,20 @@ class KickPusherClient:
         self._last_frame_at = 0.0
         self._activity_timeout_seconds = 60.0
 
-    def start(self, channel_slug: str) -> None:
+    def start(self, channel_slug: str, cancel_event: threading.Event | None = None) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            return
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
         channel = self.resolve_channel(channel_slug)
         chatroom_id = str(channel.get("chatroom_id") or "").strip()
         if not chatroom_id:
             raise RuntimeError(f"Nao foi possivel resolver o chatroom da Kick para @{channel_slug}.")
 
         with self._lock:
+            if cancel_event is not None and cancel_event.is_set():
+                return
             if self._thread and self._thread.is_alive():
                 return
 
@@ -106,16 +113,28 @@ class KickPusherClient:
             except RuntimeError as exc:
                 print(f"[KICK WS] erro ao aguardar thread: {exc}")
 
-        self._thread = None
-        self._status = "desconectado"
+        # create_connection can take longer than the bounded join above.
+        # Keep the reference so start() cannot reset an old worker's stop event.
+        if not thread or not thread.is_alive():
+            self._thread = None
+        self._status = "desconectando" if thread and thread.is_alive() else "desconectado"
 
     def is_running(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
 
     def wait_until_connected(self, timeout: float = 10.0) -> bool:
-        return self._connected_event.wait(timeout=max(0.1, float(timeout)))
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        while not self._stop_event.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return self._connected_event.is_set()
+            if self._connected_event.wait(timeout=min(0.1, remaining)):
+                return True
+        return False
 
     def get_status(self) -> str:
+        if self._stop_event.is_set() and self.is_running():
+            return "desconectando"
         return self._status
 
     def get_last_error(self) -> str:
@@ -205,6 +224,10 @@ class KickPusherClient:
             ],
         )
         self._ws = ws
+        if self._stop_event.is_set():
+            self._ws = None
+            ws.close()
+            return
         ws.settimeout(1.0)
         now = time.time()
         connected_deadline = now + PUSHER_CONNECT_TIMEOUT_SECONDS
@@ -257,6 +280,9 @@ class KickPusherClient:
         try:
             payload = json.loads(raw)
         except (json.JSONDecodeError, TypeError, ValueError):
+            return
+
+        if not isinstance(payload, dict):
             return
 
         event_name = str(payload.get("event") or "").strip()
@@ -377,9 +403,7 @@ class KickPusherClient:
         return value
 
     def _sleep_interruptible(self, seconds: float) -> None:
-        deadline = time.time() + max(0.1, seconds)
-        while time.time() < deadline and not self._stop_event.is_set():
-            time.sleep(0.1)
+        self._stop_event.wait(timeout=max(0.1, seconds))
 
     @staticmethod
     def _slug_candidates(slug: str) -> list[str]:

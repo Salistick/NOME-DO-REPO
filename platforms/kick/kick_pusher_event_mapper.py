@@ -242,12 +242,9 @@ def _badge_types(badges: list[Any]) -> set[str]:
 
 
 def _has_any_badge_type(badge_types: set[str], wanted: set[str]) -> bool:
-    for item in badge_types:
-        if item in wanted:
-            return True
-        if any(want in item for want in wanted):
-            return True
-    return False
+    # Role substrings also match labels such as "non-subscriber" or "model".
+    # Only explicit role names may grant chat/TTS privileges.
+    return bool(badge_types & wanted)
 
 
 def _has_truthy_field(source: dict[str, Any], *keys: str) -> bool:
@@ -268,7 +265,8 @@ def _has_truthy_field(source: dict[str, Any], *keys: str) -> bool:
 
     roles = source.get("roles")
     if isinstance(roles, str):
-        return any(key.lower() in roles.lower() for key in keys)
+        lowered = {role.lower() for role in re.split(r"[\s,]+", roles.strip())}
+        return any(key.lower() in lowered for key in keys)
     if isinstance(roles, list):
         lowered = {str(role or "").strip().lower() for role in roles}
         return any(key.lower() in lowered for key in keys)
@@ -282,16 +280,22 @@ def _has_membership_data(source: dict[str, Any]) -> bool:
 
     for key in ("membership", "subscription", "subscriber", "subscriptions"):
         value = source.get(key)
-        if isinstance(value, dict) and value:
-            return True
-        if isinstance(value, list) and value:
-            return True
-        if isinstance(value, str) and value.strip().lower() not in {"0", "false", "no", "none", "null"}:
-            return True
-        if isinstance(value, bool) and value:
+        if _active_membership(value):
             return True
 
     return False
+
+
+def _active_membership(value: Any) -> bool:
+    if isinstance(value, list):
+        return any(_active_membership(item) for item in value)
+    if isinstance(value, dict):
+        # Metadata (including expired subscriptions) is not proof of membership.
+        for key in ("active", "is_active", "is_subscriber", "is_subscribed"):
+            if key in value:
+                return _truthy(value[key])
+        return str(value.get("status") or "").strip().lower() in {"active", "current"}
+    return _truthy(value)
 
 
 def _truthy(value: Any) -> bool:
@@ -313,7 +317,7 @@ def _nested(source: dict[str, Any], *keys: str) -> Any:
 
 def _first_dict(*values: Any) -> dict[str, Any]:
     for value in values:
-        if isinstance(value, dict):
+        if isinstance(value, dict) and value:
             return value
     return {}
 

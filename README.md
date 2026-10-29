@@ -2,6 +2,8 @@
 
 Aplicativo Windows que acompanha chats da Twitch, YouTube e Kick e transforma comandos em voz usando Amazon Polly. A interface permite selecionar plataformas, saída de áudio e credenciais AWS.
 
+Versão atual: **v1.2.0**. Veja o [histórico de mudanças](CHANGELOG.md) e baixe o executável ou instalador na [release v1.2.0](https://github.com/Salistick/NOME-DO-REPO/releases/tag/v1.2.0).
+
 ## Compatibilidade
 
 | Forma de uso | Requisitos |

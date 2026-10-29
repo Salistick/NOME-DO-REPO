@@ -1,4 +1,6 @@
 import re
+import queue
+import threading
 import tkinter as tk
 import webbrowser
 from tkinter import messagebox, ttk
@@ -11,6 +13,7 @@ from services.tts.polly_credentials import (
     POLLY_SOURCE_SSO,
     PollyCredentialsError,
     PollyCredentialStore,
+    PollyOperationCancelled,
 )
 
 POLLY_SETUP_GUIDED = "guided"
@@ -18,16 +21,15 @@ POLLY_CLOUDSHELL_URL = "https://console.aws.amazon.com/cloudshell/home"
 POLLY_GUIDED_IAM_USER = "TTSLivePollyBot"
 POLLY_GUIDED_POLICY_NAME = "TTSLivePollySynthesizeSpeechOnly"
 POLLY_GUIDED_COMMAND = (
-    "aws iam create-user --user-name TTSLivePollyBot 2>/dev/null || true\n"
+    "( set -e\n"
+    "aws iam get-user --user-name TTSLivePollyBot >/dev/null 2>&1 || "
+    "aws iam create-user --user-name TTSLivePollyBot >/dev/null\n"
     "aws iam put-user-policy --user-name TTSLivePollyBot "
     "--policy-name TTSLivePollySynthesizeSpeechOnly "
     "--policy-document '{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\","
     "\"Action\":\"polly:SynthesizeSpeech\",\"Resource\":\"*\"}]}'\n"
-    "for key in $(aws iam list-access-keys --user-name TTSLivePollyBot "
-    "--query 'AccessKeyMetadata[].AccessKeyId' --output text); do "
-    "aws iam delete-access-key --user-name TTSLivePollyBot --access-key-id \"$key\"; done\n"
     "aws iam create-access-key --user-name TTSLivePollyBot "
-    "--query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text"
+    "--query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text\n)"
 )
 POLLY_SETUP_RECOVERABLE_ERRORS = (
     RuntimeError,
@@ -55,6 +57,110 @@ GUIDED_STEPS = (
 )
 
 
+class _OperationGate:
+    """Linearize cancellation and the short, atomic local credential commit."""
+
+    def __init__(self):
+        self.cancelled = threading.Event()
+        self._lock = threading.Lock()
+
+    def check(self):
+        if self.cancelled.is_set():
+            raise PollyOperationCancelled("Operacao cancelada.")
+
+    def cancel(self):
+        with self._lock:
+            self.cancelled.set()
+
+    def commit(self, action):
+        with self._lock:
+            self.check()
+            return action()
+
+
+class _BackgroundTasks:
+    """Worker communication is queue-only; every callback runs in Tk's thread."""
+
+    def __init__(self, window):
+        self.window = window
+        self._events = queue.Queue()
+        self._generation = 0
+        self._gate = None
+        self._callbacks = None
+        self._closed = False
+        self.busy = False
+        self._after_id = window.after(50, self._poll)
+        window.bind("<Destroy>", self._on_destroy, add="+")
+
+    def start(self, work, on_success, on_error, on_status=None):
+        if self._closed or self.busy:
+            return False
+        self._generation += 1
+        generation = self._generation
+        gate = self._gate = _OperationGate()
+        self._callbacks = (on_success, on_error, on_status)
+        self.busy = True
+        events = self._events
+
+        def run():
+            try:
+                result = work(gate, lambda message: events.put((generation, "status", message)))
+                gate.check()
+                events.put((generation, "done", result))
+            except PollyOperationCancelled:
+                events.put((generation, "cancelled", None))
+            except Exception as exc:
+                events.put((generation, "error", str(exc)))
+
+        threading.Thread(target=run, name="PollySetupWorker", daemon=True).start()
+        return True
+
+    def _poll(self):
+        self._after_id = None
+        if self._closed:
+            return
+        for _ in range(100):
+            try:
+                generation, kind, value = self._events.get_nowait()
+            except queue.Empty:
+                break
+            if generation != self._generation or self._callbacks is None:
+                continue
+            success, error, status = self._callbacks
+            if kind == "status":
+                if status is not None:
+                    status(value)
+                continue
+            self.busy = False
+            self._callbacks = None
+            if kind == "done":
+                success(value)
+            elif kind == "error":
+                error(value)
+            if self._closed:
+                return
+        self._after_id = self.window.after(50, self._poll)
+
+    def _on_destroy(self, event):
+        if event.widget is self.window:
+            self.close()
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        if self._gate is not None:
+            self._gate.cancel()
+        self._callbacks = None
+        self.busy = False
+        if self._after_id is not None:
+            try:
+                self.window.after_cancel(self._after_id)
+            except tk.TclError:
+                pass
+            self._after_id = None
+
+
 class PollySetupDialog:
     def __init__(
         self,
@@ -66,6 +172,8 @@ class PollySetupDialog:
         self.store = store
         self.required = bool(required)
         self.result = False
+        self._closed = False
+        self._busy = False
 
         self.window = tk.Toplevel(parent)
         self.window.title("Amazon Polly")
@@ -83,6 +191,7 @@ class PollySetupDialog:
         self.secret_key_var = tk.StringVar(value="")
         self.session_token_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="")
+        self._tasks = _BackgroundTasks(self.window)
 
         self._load_existing_values()
         self._build()
@@ -93,7 +202,11 @@ class PollySetupDialog:
         self.window.wait_window()
 
     def _load_existing_values(self):
-        config = self.store.load_config()
+        try:
+            config = self.store.load_config()
+        except POLLY_SETUP_RECOVERABLE_ERRORS as exc:
+            self.status_var.set(f"Configuracao existente inacessivel: {exc}")
+            return
         if not config:
             return
 
@@ -134,7 +247,7 @@ class PollySetupDialog:
         action_bar = tk.Frame(frame, bg="#111111")
         action_bar.pack(fill="x", pady=(0, 12))
 
-        tk.Button(
+        self._save_button = tk.Button(
             action_bar,
             text="Salvar e testar",
             command=self._save_and_test,
@@ -147,7 +260,8 @@ class PollySetupDialog:
             padx=14,
             pady=10,
             cursor="hand2",
-        ).pack(side="left", fill="x", expand=True)
+        )
+        self._save_button.pack(side="left", fill="x", expand=True)
 
         tk.Button(
             action_bar,
@@ -392,27 +506,98 @@ class PollySetupDialog:
         ).pack(anchor="w", pady=(5, 0))
 
     def _save_and_test(self):
+        if self._closed or self._busy:
+            return
         source = self.source_var.get()
         region = self.region_var.get().strip()
-
         try:
             if source == POLLY_SETUP_GUIDED:
-                self._save_guided_access_key(region)
+                raw = self.guided_output_text.get("1.0", "end").strip()
+                access_key, secret = parse_cloudshell_access_key_output(raw)
+                values = dict(region=region, access_key_id=access_key, secret_access_key=secret)
             elif source == POLLY_SOURCE_ACCESS_KEY:
-                self._save_access_key(region)
+                values = dict(
+                    region=region, access_key_id=self.access_key_var.get().strip(),
+                    secret_access_key=self.secret_key_var.get().strip(),
+                    session_token=self.session_token_var.get().strip(),
+                )
             else:
-                self._save_sso_login(region)
+                self._begin_sso(region, self.sso_start_url_var.get().strip(), self.sso_region_var.get().strip())
+                return
+        except POLLY_SETUP_RECOVERABLE_ERRORS as exc:
+            self._operation_failed(str(exc))
+            return
+        self._set_busy(True)
+        self._set_status("Testando credenciais no Amazon Polly...")
+        store = self.store
 
+        def validate_and_save(gate, status):
+            gate.check()
+            store.validate_access_key(**values)
+            return gate.commit(lambda: store.save_access_key(**values))
+
+        self._tasks.start(validate_and_save, self._saved, self._operation_failed, self._set_status)
+
+    def _set_busy(self, busy):
+        self._busy = busy
+        self._save_button.configure(state="disabled" if busy else "normal")
+
+    def _saved(self, _result=None):
+        if not self._closed:
             self.result = True
             self._close()
 
-        except POLLY_SETUP_RECOVERABLE_ERRORS as exc:
-            self.status_var.set("Falha ao validar credenciais.")
-            messagebox.showerror(
-                "Amazon Polly",
-                f"Nao foi possivel validar o Amazon Polly:\n\n{exc}",
-                parent=self.window,
+    def _operation_failed(self, error):
+        if self._closed:
+            return
+        self._set_busy(False)
+        self._set_status("Falha ao validar credenciais.")
+        messagebox.showerror("Amazon Polly", f"Nao foi possivel validar o Amazon Polly:\n\n{error}", parent=self.window)
+
+    def _begin_sso(self, region, start_url, sso_region):
+        self._set_busy(True)
+        self._set_status("Iniciando login AWS...")
+        store = self.store
+
+        def login_and_list(gate, status):
+            token = store.start_sso_browser_login(
+                start_url=start_url, sso_region=sso_region,
+                status_callback=status, cancel_event=gate.cancelled,
             )
+            gate.check()
+            status("Buscando contas AWS...")
+            accounts = store.list_sso_accounts(sso_region, token, cancel_event=gate.cancelled)
+            if not accounts:
+                raise PollyCredentialsError("Nenhuma conta AWS disponivel para esse login.")
+            return token, accounts
+
+        def choose_account(result):
+            if self._closed or self._tasks._closed:
+                return
+            token, accounts = result
+            selection = SSOAccountRoleDialog(
+                parent=self.window, store=store, sso_region=sso_region,
+                access_token=token, accounts=accounts,
+            ).result
+            if self._closed or self._tasks._closed:
+                return
+            if not selection:
+                self._set_busy(False)
+                self._set_status("Selecao de conta/role cancelada.")
+                return
+            values = dict(region=region, sso_region=sso_region, account_id=selection["account_id"], role_name=selection["role_name"])
+            self._set_status("Testando permissao do Amazon Polly...")
+
+            def validate_and_save(gate, status):
+                gate.check()
+                store.validate_sso_role(access_token=token, **values)
+                return gate.commit(lambda: store.save_sso(
+                    start_url=start_url, account_name=selection.get("account_name", ""), **values,
+                ))
+
+            self._tasks.start(validate_and_save, self._saved, self._operation_failed, self._set_status)
+
+        self._tasks.start(login_and_list, choose_account, self._operation_failed, self._set_status)
 
     def _open_cloudshell(self):
         self._set_status("AWS CloudShell aberto. Depois clique em Copiar comando aqui no bot.")
@@ -429,92 +614,8 @@ class PollySetupDialog:
         except tk.TclError:
             self._set_status("Nao consegui copiar automaticamente. Abra o AWS CloudShell e copie o comando do README.")
 
-    def _save_guided_access_key(self, region: str) -> None:
-        raw_output = self.guided_output_text.get("1.0", "end").strip()
-        access_key_id, secret_access_key = parse_cloudshell_access_key_output(raw_output)
-
-        self._set_status("Testando chave criada na AWS...")
-        self.store.validate_access_key(
-            region=region,
-            access_key_id=access_key_id,
-            secret_access_key=secret_access_key,
-        )
-        self.store.save_access_key(
-            region=region,
-            access_key_id=access_key_id,
-            secret_access_key=secret_access_key,
-        )
-
-    def _save_access_key(self, region: str) -> None:
-        self._set_status("Testando credenciais no Amazon Polly...")
-
-        access_key_id = self.access_key_var.get().strip()
-        secret_access_key = self.secret_key_var.get().strip()
-        session_token = self.session_token_var.get().strip()
-
-        self.store.validate_access_key(
-            region=region,
-            access_key_id=access_key_id,
-            secret_access_key=secret_access_key,
-            session_token=session_token,
-        )
-        self.store.save_access_key(
-            region=region,
-            access_key_id=access_key_id,
-            secret_access_key=secret_access_key,
-            session_token=session_token,
-        )
-
-    def _save_sso_login(self, region: str) -> None:
-        start_url = self.sso_start_url_var.get().strip()
-        sso_region = self.sso_region_var.get().strip()
-
-        access_token = self.store.start_sso_browser_login(
-            start_url=start_url,
-            sso_region=sso_region,
-            status_callback=self._set_status,
-        )
-
-        self._set_status("Buscando contas AWS...")
-        accounts = self.store.list_sso_accounts(sso_region=sso_region, access_token=access_token)
-        if not accounts:
-            raise RuntimeError("Nenhuma conta AWS disponivel para esse login.")
-
-        selection = SSOAccountRoleDialog(
-            parent=self.window,
-            store=self.store,
-            sso_region=sso_region,
-            access_token=access_token,
-            accounts=accounts,
-        ).result
-
-        if not selection:
-            raise RuntimeError("Nenhuma conta/role AWS selecionada.")
-
-        self._set_status("Testando permissao do Amazon Polly...")
-        self.store.validate_sso_role(
-            region=region,
-            sso_region=sso_region,
-            access_token=access_token,
-            account_id=selection["account_id"],
-            role_name=selection["role_name"],
-        )
-        self.store.save_sso(
-            region=region,
-            start_url=start_url,
-            sso_region=sso_region,
-            account_id=selection["account_id"],
-            account_name=selection.get("account_name", ""),
-            role_name=selection["role_name"],
-        )
-
     def _set_status(self, message: str) -> None:
         self.status_var.set(message or "")
-        try:
-            self.window.update_idletasks()
-            self.window.update()
-        except tk.TclError as exc:
-            print(f"[POLLY UI] falha ao atualizar janela: {exc}")
 
     def _cancel(self):
         if self.required and not messagebox.askyesno(
@@ -528,6 +629,10 @@ class PollySetupDialog:
         self._close()
 
     def _close(self):
+        if self._closed:
+            return
+        self._closed = True
+        self._tasks.close()
         try:
             self.window.grab_release()
         except tk.TclError as exc:
@@ -600,6 +705,8 @@ class SSOAccountRoleDialog:
         self.result = None
         self.account_by_label = {}
         self.role_by_label = {}
+        self._loaded_account_id = None
+        self._closed = False
 
         self.window = tk.Toplevel(parent)
         self.window.title("Selecionar conta AWS")
@@ -612,6 +719,7 @@ class SSOAccountRoleDialog:
         self.account_var = tk.StringVar(value="")
         self.role_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="")
+        self._tasks = _BackgroundTasks(self.window)
 
         self._build()
         self._center()
@@ -688,7 +796,7 @@ class SSOAccountRoleDialog:
         button_frame = tk.Frame(frame, bg="#111111")
         button_frame.pack(side="bottom", fill="x", pady=(18, 0))
 
-        tk.Button(
+        self._select_button = tk.Button(
             button_frame,
             text="Usar esta role",
             command=self._select,
@@ -701,7 +809,8 @@ class SSOAccountRoleDialog:
             padx=14,
             pady=8,
             cursor="hand2",
-        ).pack(side="left", fill="x", expand=True)
+        )
+        self._select_button.pack(side="left", fill="x", expand=True)
 
         tk.Button(
             button_frame,
@@ -744,26 +853,42 @@ class SSOAccountRoleDialog:
             return
 
         account_id = str(account.get("accountId") or "").strip()
+        self._loaded_account_id = None
+        self.role_by_label = {}
+        self.role_combo["values"] = []
+        self.role_var.set("")
+        self._select_button.configure(state="disabled")
         self.status_var.set("Buscando roles...")
-        self.window.update_idletasks()
-
-        try:
-            roles = self.store.list_sso_roles(
-                sso_region=self.sso_region,
-                access_token=self.access_token,
-                account_id=account_id,
-            )
-        except POLLY_SETUP_RECOVERABLE_ERRORS as exc:
-            self.role_combo["values"] = []
-            self.role_var.set("")
-            self.status_var.set("Falha ao buscar roles.")
-            messagebox.showerror(
-                "Amazon Polly",
-                f"Nao foi possivel listar roles dessa conta:\n\n{exc}",
-                parent=self.window,
-            )
+        if self._tasks.busy:
+            # Let the current bounded request finish, then load the latest
+            # selection. Fast account changes never spawn unbounded workers.
             return
+        store, region, token = self.store, self.sso_region, self.access_token
 
+        def load(gate, status):
+            return store.list_sso_roles(region, token, account_id, cancel_event=gate.cancelled)
+
+        def current_selection_matches():
+            current = self.account_by_label.get(self.account_var.get()) or {}
+            return str(current.get("accountId") or "").strip() == account_id
+
+        def loaded(roles):
+            if not current_selection_matches():
+                self._load_roles_for_selected_account()
+                return
+            self._show_roles(account_id, roles)
+
+        def failed(error):
+            if not current_selection_matches():
+                self._load_roles_for_selected_account()
+                return
+            self.status_var.set("Falha ao buscar roles.")
+            messagebox.showerror("Amazon Polly", f"Nao foi possivel listar roles dessa conta:\n\n{error}", parent=self.window)
+
+        self._tasks.start(load, loaded, failed)
+
+    def _show_roles(self, account_id, roles):
+        self._loaded_account_id = account_id
         self.role_by_label = {}
         role_labels = []
         for role in roles:
@@ -776,12 +901,16 @@ class SSOAccountRoleDialog:
         self.role_combo["values"] = role_labels
         self.role_var.set(role_labels[0] if role_labels else "")
         self.status_var.set("" if role_labels else "Nenhuma role disponivel nesta conta.")
+        self._select_button.configure(state="normal" if role_labels else "disabled")
 
     def _select(self):
         account = self.account_by_label.get(self.account_var.get())
         role_name = self.role_var.get().strip()
 
-        if not account or not role_name:
+        if (
+            not account or not role_name or role_name not in self.role_by_label
+            or str(account.get("accountId") or "").strip() != self._loaded_account_id
+        ):
             messagebox.showerror(
                 "Amazon Polly",
                 "Selecione uma conta e uma role.",
@@ -801,6 +930,10 @@ class SSOAccountRoleDialog:
         self._close()
 
     def _close(self):
+        if self._closed:
+            return
+        self._closed = True
+        self._tasks.close()
         try:
             self.window.grab_release()
         except tk.TclError as exc:
@@ -820,7 +953,13 @@ class SSOAccountRoleDialog:
 
 def ensure_polly_credentials_configured(parent, required: bool = True) -> bool:
     store = PollyCredentialStore()
-    if store.has_saved_configuration():
+    try:
+        configured = store.has_saved_configuration()
+    except POLLY_SETUP_RECOVERABLE_ERRORS:
+        # The dialog displays the read failure and keeps the original file
+        # until the user explicitly validates and saves replacement credentials.
+        configured = False
+    if configured:
         return True
 
     dialog = PollySetupDialog(parent=parent, store=store, required=required)

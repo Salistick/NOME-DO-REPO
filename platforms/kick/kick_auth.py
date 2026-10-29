@@ -1,6 +1,5 @@
 import base64
 import hashlib
-import json
 import secrets
 import threading
 import time
@@ -10,6 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import requests
+
+from secure_storage import migration_backup_path, secure_read_json, secure_write_json
 
 from config import (
     KICK_CLIENT_ID,
@@ -110,6 +111,7 @@ class OAuthCallbackServer:
 class KickAuth:
     def __init__(self, token_cache_file: Path):
         self.token_cache_file = Path(token_cache_file)
+        self._cache_lock = threading.RLock()
 
     def is_configured(self) -> bool:
         return bool(KICK_CLIENT_ID and KICK_CLIENT_SECRET and KICK_REDIRECT_URI)
@@ -119,25 +121,23 @@ class KickAuth:
         return bool(cached.get("access_token") or cached.get("refresh_token"))
 
     def load_token_cache(self) -> dict:
-        if not self.token_cache_file.exists():
-            return {}
+        with self._cache_lock:
+            try:
+                data = secure_read_json(self.token_cache_file)
+            except (OSError, TypeError, ValueError):
+                return {}
 
-        try:
-            with open(self.token_cache_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
-            return {}
-
-        return data if isinstance(data, dict) else {}
+            return data if isinstance(data, dict) else {}
 
     def save_token_cache(self, token_data: dict) -> None:
-        self.token_cache_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.token_cache_file, "w", encoding="utf-8") as f:
-            json.dump(token_data, f, ensure_ascii=False, indent=2)
+        with self._cache_lock:
+            secure_write_json(self.token_cache_file, token_data)
 
     def clear_token_cache(self) -> None:
         try:
-            self.token_cache_file.unlink(missing_ok=True)
+            with self._cache_lock:
+                self.token_cache_file.unlink(missing_ok=True)
+                migration_backup_path(self.token_cache_file).unlink(missing_ok=True)
         except OSError as exc:
             print(f"[KICK AUTH] nao foi possivel limpar token salvo: {exc}")
 
@@ -226,7 +226,7 @@ class KickAuth:
         token_data = self.load_token_cache()
         now = int(time.time())
 
-        if token_data.get("access_token") and int(token_data.get("expires_at", 0) or 0) > now + 60:
+        if self._cached_token_is_fresh(token_data, now):
             return token_data
 
         refresh_token = (token_data.get("refresh_token") or "").strip()
@@ -248,7 +248,7 @@ class KickAuth:
         token_data = self.load_token_cache()
         now = int(time.time())
 
-        if token_data.get("access_token") and int(token_data.get("expires_at", 0) or 0) > now + 60:
+        if self._cached_token_is_fresh(token_data, now):
             return token_data
 
         refresh_token = (token_data.get("refresh_token") or "").strip()
@@ -285,6 +285,14 @@ class KickAuth:
             raise RuntimeError("Kick nao retornou access_token.")
         return data
 
+    @staticmethod
+    def _cached_token_is_fresh(token_data: dict, now: int) -> bool:
+        try:
+            expires_at = int(token_data.get("expires_at", 0) or 0)
+        except (TypeError, ValueError):
+            return False
+        return bool(token_data.get("access_token") and expires_at > now + 60)
+
     def _normalize_token_data(self, token_data: dict) -> dict:
         normalized = dict(token_data)
         normalized["expires_at"] = int(time.time()) + int(normalized.get("expires_in", 0) or 0)
@@ -316,6 +324,8 @@ class KickAuth:
         except (requests.JSONDecodeError, TypeError, ValueError):
             return token_data
 
+        if not isinstance(data, dict):
+            return token_data
         profile = data.get("data")
         if isinstance(profile, list) and profile:
             profile = profile[0]

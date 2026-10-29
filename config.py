@@ -2,7 +2,7 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+from secret_config import load_secret_environment
 
 
 def get_base_dir() -> Path:
@@ -13,6 +13,10 @@ def get_base_dir() -> Path:
 
 
 BASE_DIR = get_base_dir()
+DATA_DIR = Path(os.environ.get("TTSLIVE_DATA_DIR") or BASE_DIR / "data").expanduser().resolve()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+PLATFORM_SECRET_FILE = DATA_DIR / "platform_secrets.bin"
+ENV_SECRET_BACKUP_FILE = DATA_DIR / "env_original.bin"
 
 
 def get_expected_env_path() -> Path:
@@ -22,11 +26,7 @@ def get_expected_env_path() -> Path:
 def load_app_env() -> Path | None:
     env_path = get_expected_env_path()
 
-    if not env_path.exists():
-        return None
-
-    load_dotenv(env_path, override=True)
-    return env_path
+    return load_secret_environment(env_path, PLATFORM_SECRET_FILE, ENV_SECRET_BACKUP_FILE)
 
 
 ENV_FILE_PATH = load_app_env()
@@ -39,15 +39,13 @@ def _get_int_env(name: str, default: int) -> int:
         return default
 
 
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
 LOG_DIR = DATA_DIR / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 APP_STATE_FILE = DATA_DIR / "app_state.json"
 
 TTS_AUDIO_DIR = DATA_DIR / "tts_audio"
-TTS_AUDIO_DIR.mkdir(exist_ok=True)
+TTS_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 TTS_CONFIG_FILE = DATA_DIR / "tts_config.json"
 TTS_PRONUNCIATION_FILE = DATA_DIR / "tts_pronunciations.json"
@@ -149,5 +147,7 @@ def build_env_help_message() -> str:
         f".env carregado: {loaded}\n\n"
         "Local esperado para credenciais de plataformas, quando usadas:\n"
         f"- {env_path}\n\n"
+        "Os valores secretos do .env e os tokens sao protegidos pelo usuario Windows.\n"
+        f"Armazenamento protegido: {PLATFORM_SECRET_FILE}\n\n"
         "As credenciais do Amazon Polly agora sao configuradas dentro do app."
     )

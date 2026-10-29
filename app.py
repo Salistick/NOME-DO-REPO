@@ -1,24 +1,74 @@
+import os
+import queue
 import sys
 import threading
 import time
 import tkinter as tk
 import traceback
+from pathlib import Path
 from tkinter import messagebox
+
+from single_instance import AlreadyRunningError, SingleInstanceLock
+
+if __name__ == "__main__" and any(
+    argument in sys.argv for argument in ("--recover-env", "--recover-token")
+):
+    from maintenance import run_maintenance
+
+    raise SystemExit(run_maintenance(sys.argv[1:]))
+
+if __name__ == "__main__" and "--smoke-test" not in sys.argv:
+    # Configuration can migrate credentials while importing. Hold the same
+    # lifetime lock before that first write, including two simultaneous launches.
+    _base_dir = (Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
+                 else Path(__file__).resolve().parent)
+    _bootstrap_data_dir = Path(os.environ.get("TTSLIVE_DATA_DIR") or _base_dir / "data")
+    try:
+        _bootstrap_instance_lock = SingleInstanceLock(_bootstrap_data_dir).acquire()
+    except AlreadyRunningError:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "TTS Live", "O TTS Live ja esta aberto para esta pasta de dados.", parent=root,
+        )
+        root.destroy()
+        raise SystemExit(1)
 
 from app_state import AppStateStore
 from auto_updater import try_start_auto_update
-from config import (
-    APP_STATE_FILE,
-    DATA_DIR,
-    LOG_DIR,
-    TTS_AUDIO_DIR,
-    YOUTUBE_CONFIG_FILE,
-    YOUTUBE_MESSAGE_STORE_FILE,
-    YOUTUBE_TOKEN_CACHE_FILE,
-    build_env_help_message,
-    validate_local_config,
-    validate_required_env_values,
-)
+from secure_storage import SecureStorageError
+
+try:
+    from config import (
+        APP_STATE_FILE,
+        DATA_DIR,
+        LOG_DIR,
+        TTS_AUDIO_DIR,
+        YOUTUBE_CONFIG_FILE,
+        YOUTUBE_MESSAGE_STORE_FILE,
+        YOUTUBE_TOKEN_CACHE_FILE,
+        build_env_help_message,
+        validate_local_config,
+        validate_required_env_values,
+    )
+except SecureStorageError:
+    if __name__ != "__main__":
+        raise
+    if globals().get("_bootstrap_instance_lock") is not None:
+        _bootstrap_instance_lock.release()
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "TTS Live - Credenciais",
+            "Nao foi possivel abrir as credenciais salvas. Use o mesmo usuario Windows "
+            "que fez a configuracao. Para recuperar um backup protegido, consulte "
+            "a secao de recuperacao no README.", parent=root,
+        )
+        root.destroy()
+    except tk.TclError:
+        pass
+    raise SystemExit(1)
 from launcher_gui import LauncherGUI
 from logging_setup import configure_logging
 from platforms.kick.kick_bot import KickBot
@@ -37,6 +87,7 @@ APP_RECOVERABLE_ERRORS = (
     TypeError,
     tk.TclError,
 )
+_pending_critical_errors = queue.Queue(maxsize=20)
 
 
 class StartupStatusWindow:
@@ -110,6 +161,12 @@ class StartupStatusWindow:
 
 
 def show_critical_error(message: str):
+    if threading.current_thread() is not threading.main_thread():
+        try:
+            _pending_critical_errors.put_nowait(message)
+        except queue.Full:
+            print("[APP] fila de avisos cheia:", message)
+        return
     try:
         root = tk.Tk()
         root.withdraw()
@@ -117,6 +174,17 @@ def show_critical_error(message: str):
         root.destroy()
     except tk.TclError:
         print(message)
+
+
+def _show_pending_critical_errors(root):
+    # Workers only enqueue plain data. All Tcl/Tk operations stay on the GUI thread.
+    for _ in range(20):
+        try:
+            message = _pending_critical_errors.get_nowait()
+        except queue.Empty:
+            break
+        messagebox.showerror("TTS Live - Erro critico", message, parent=root)
+    root.after(100, _show_pending_critical_errors, root)
 
 
 def format_critical_error_message(exc: BaseException) -> str:
@@ -165,10 +233,17 @@ def validate_runtime_environment() -> None:
 
 
 def main():
+    instance_lock = globals().get("_bootstrap_instance_lock") or SingleInstanceLock(DATA_DIR)
+    with instance_lock:
+        return _run_app()
+
+
+def _run_app():
     startup_window = StartupStatusWindow()
-    validate_runtime_environment()
-    configure_logging(LOG_DIR)
+    services = []
     try:
+        validate_runtime_environment()
+        configure_logging(LOG_DIR)
         if try_start_auto_update(notify=startup_window.set_message):
             startup_window.refresh()
             time.sleep(1.0)
@@ -193,15 +268,19 @@ def main():
 
         startup_window.set_message("Inicializando audio e servicos...")
         tts_manager = TTSManager()
+        services.append(tts_manager)
 
         twitch_bot = TwitchBot(tts_manager)
+        services.append(twitch_bot)
         youtube_bot = YouTubeBot(
             tts_manager=tts_manager,
             token_cache_file=YOUTUBE_TOKEN_CACHE_FILE,
             config_file=YOUTUBE_CONFIG_FILE,
             message_store_file=YOUTUBE_MESSAGE_STORE_FILE,
         )
+        services.append(youtube_bot)
         kick_bot = KickBot(tts_manager=tts_manager)
+        services.append(kick_bot)
 
         tts_manager.youtube_bot = youtube_bot
 
@@ -600,6 +679,10 @@ def main():
             kick_bot.start(force_auth=not kick_bot.has_saved_auth())
             set_kick_enabled(True)
 
+        def cancel_connect_attempts():
+            twitch_connect_cancel_event.set()
+            youtube_connect_cancel_event.set()
+
         startup_window.set_message("Abrindo interface...")
         startup_window.close()
 
@@ -614,7 +697,9 @@ def main():
             on_configure_polly=on_configure_polly,
             get_app_state=get_app_state,
             save_app_state=save_app_state,
+            on_shutdown=cancel_connect_attempts,
         )
+        gui.root.after(100, _show_pending_critical_errors, gui.root)
 
         auto_connect_twitch_if_cached()
 
@@ -624,15 +709,29 @@ def main():
         try:
             gui.run()
         finally:
-            twitch_bot.shutdown()
-            youtube_bot.shutdown()
-            kick_bot.shutdown()
-            tts_manager.shutdown()
+            cancel_connect_attempts()
     finally:
+        for service in reversed(services):
+            try:
+                service.shutdown()
+            except APP_RECOVERABLE_ERRORS as exc:
+                print(f"[APP] falha ao encerrar {type(service).__name__}: {exc}")
         startup_window.close()
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="TTS Live")
+    parser.add_argument("--smoke-test", action="store_true")
+    parser.add_argument("--smoke-output", type=str)
+    args = parser.parse_args()
+    if args.smoke_test:
+        if not args.smoke_output:
+            parser.error("--smoke-test requer --smoke-output")
+        from smoke_test import run_smoke_test
+
+        raise SystemExit(run_smoke_test(Path(args.smoke_output)))
     install_exception_hooks()
     try:
         main()

@@ -28,6 +28,7 @@ class YouTubeLiveResolver:
         }
         self._search_url = "https://www.googleapis.com/youtube/v3/search"
         self._videos_url = "https://www.googleapis.com/youtube/v3/videos"
+        self._broadcasts_url = "https://www.googleapis.com/youtube/v3/liveBroadcasts"
         self._live_cache = {
             "channel_id": None,
             "video_id": None,
@@ -49,6 +50,17 @@ class YouTubeLiveResolver:
 
         if not channel_id:
             raise ValueError("channel_id e obrigatorio.")
+
+        # Authenticated channels can be discovered and revalidated without
+        # scraping /live or /streams. Keep the public fallback for other channels
+        # and for accounts whose API permissions/quota are unavailable.
+        if access_token:
+            official_live = self._resolve_official_cached_live(channel_id, access_token)
+            if official_live is None:
+                official_live = self._resolve_owned_broadcast(channel_id, access_token)
+            if official_live:
+                self._update_cache(channel_id, official_live)
+                return official_live
 
         cached = self._resolve_from_cache(channel_id)
         if cached:
@@ -137,6 +149,87 @@ class YouTubeLiveResolver:
     # ==================================
     # Cache
     # ==================================
+
+    def _resolve_official_cached_live(self, channel_id: str, access_token: str) -> dict | None:
+        if self._live_cache.get("channel_id") != channel_id:
+            return None
+        video_id = str(self._live_cache.get("video_id") or "").strip()
+        if not video_id:
+            return None
+        try:
+            with requests.get(
+                self._videos_url,
+                params={"part": "snippet,liveStreamingDetails", "id": video_id},
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=(3, 5),
+            ) as response:
+                response.raise_for_status()
+                payload = response.json()
+            items = payload.get("items", []) if isinstance(payload, dict) else []
+            for item in items if isinstance(items, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                snippet = item.get("snippet") or {}
+                details = item.get("liveStreamingDetails") or {}
+                if not isinstance(snippet, dict) or not isinstance(details, dict):
+                    continue
+                if snippet.get("channelId") != channel_id or details.get("actualEndTime"):
+                    continue
+                live_chat_id = str(details.get("activeLiveChatId") or "").strip()
+                if live_chat_id:
+                    return {
+                        "video_id": video_id,
+                        "title": snippet.get("title") or "Live ativa",
+                        "live_chat_id": live_chat_id,
+                        "source": "youtube_official",
+                        "live_url": self._build_watch_url(video_id),
+                    }
+        except (OSError, requests.RequestException, TypeError, ValueError) as exc:
+            print(f"[YOUTUBE RESOLVER] Revalidacao oficial indisponivel: {exc}")
+        return None
+
+    def _resolve_owned_broadcast(self, channel_id: str, access_token: str) -> dict | None:
+        params = {"part": "snippet", "broadcastStatus": "active", "broadcastType": "all", "maxResults": 50}
+        seen_tokens: set[str] = set()
+        try:
+            # Exactly one filter is permitted: broadcastStatus, id or mine.
+            # broadcastStatus=active returns the authenticated user's active
+            # broadcasts; the channel ID is checked before selecting one.
+            while True:
+                with requests.get(
+                    self._broadcasts_url, params=params,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    timeout=(3, 5),
+                ) as response:
+                    response.raise_for_status()
+                    payload = response.json()
+                if not isinstance(payload, dict):
+                    return None
+                items = payload.get("items") or []
+                for item in items if isinstance(items, list) else []:
+                    if not isinstance(item, dict):
+                        continue
+                    snippet = item.get("snippet") or {}
+                    if not isinstance(snippet, dict) or snippet.get("channelId") != channel_id:
+                        continue
+                    video_id = str(item.get("id") or "").strip()
+                    live_chat_id = str(snippet.get("liveChatId") or "").strip()
+                    if video_id and live_chat_id:
+                        return {
+                            "video_id": video_id,
+                            "title": snippet.get("title") or "Live ativa",
+                            "live_chat_id": live_chat_id,
+                            "source": "youtube_official",
+                            "live_url": self._build_watch_url(video_id),
+                        }
+                next_token = str(payload.get("nextPageToken") or "").strip()
+                if not next_token or next_token in seen_tokens:
+                    break
+                seen_tokens.add(next_token)
+                params["pageToken"] = next_token
+        except (OSError, requests.RequestException, TypeError, ValueError) as exc:
+            print(f"[YOUTUBE RESOLVER] Descoberta oficial indisponivel; usando fallback publico: {exc}")
+        return None
 
     def _resolve_from_cache(self, channel_id: str) -> dict | None:
         cached_channel_id = self._live_cache.get("channel_id")

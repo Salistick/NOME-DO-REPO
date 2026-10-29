@@ -1,4 +1,3 @@
-import json
 import secrets
 import threading
 import time
@@ -8,6 +7,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import requests
+
+from secure_storage import migration_backup_path, secure_read_json, secure_write_json
 
 from config import (
     YOUTUBE_CLIENT_ID,
@@ -124,19 +125,23 @@ class YouTubeAuth:
     def __init__(self, token_cache_file: Path, config_store: YouTubeConfigStore):
         self.token_cache_file = Path(token_cache_file)
         self.config_store = config_store
+        self._lock = threading.RLock()
 
     # ==================================
     # token cache
     # ==================================
 
     def _load_token_cache(self) -> dict:
+        with self._lock:
+            return self._load_token_cache_unlocked()
+
+    def _load_token_cache_unlocked(self) -> dict:
         if not self.token_cache_file.exists():
             return {"accounts": []}
 
         try:
-            with open(self.token_cache_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            data = secure_read_json(self.token_cache_file)
+        except (OSError, TypeError, ValueError):
             return {"accounts": []}
 
         if not isinstance(data, dict):
@@ -149,11 +154,14 @@ class YouTubeAuth:
         return {"accounts": accounts}
 
     def _save_token_cache(self, data: dict) -> None:
-        self.token_cache_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.token_cache_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        with self._lock:
+            secure_write_json(self.token_cache_file, data)
 
     def _upsert_account_token(self, account_data: dict) -> None:
+        with self._lock:
+            self._upsert_account_token_unlocked(account_data)
+
+    def _upsert_account_token_unlocked(self, account_data: dict) -> None:
         cache = self._load_token_cache()
         accounts = cache["accounts"]
 
@@ -177,6 +185,10 @@ class YouTubeAuth:
         self._upsert_account_token(account_data)
 
     def _remove_account_token_by_account_id(self, account_id: str) -> bool:
+        with self._lock:
+            return self._remove_account_token_by_account_id_unlocked(account_id)
+
+    def _remove_account_token_by_account_id_unlocked(self, account_id: str) -> bool:
         account_id = (account_id or "").strip()
         if not account_id:
             return False
@@ -194,6 +206,10 @@ class YouTubeAuth:
 
         cache["accounts"] = new_accounts
         self._save_token_cache(cache)
+        backup = migration_backup_path(self.token_cache_file)
+        if backup.exists():
+            # Forgetting an account also removes its token from the recovery copy.
+            secure_write_json(backup, cache)
         return True
 
     def remove_account_by_account_id(self, account_id: str) -> bool:

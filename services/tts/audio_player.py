@@ -5,12 +5,15 @@ import threading
 import time
 import uuid
 import wave
+from dataclasses import dataclass
 from pathlib import Path
 
 if os.name == "nt":
     os.environ.setdefault("SDL_AUDIODRIVER", "directsound")
 
 import pygame
+
+MAX_PENDING_AUDIO = 100
 
 AUDIO_PLAYER_RECOVERABLE_ERRORS = (
     RuntimeError,
@@ -20,6 +23,13 @@ AUDIO_PLAYER_RECOVERABLE_ERRORS = (
     ImportError,
     pygame.error,
 )
+
+
+@dataclass
+class _AudioTask:
+    path: Path
+    generation: int
+    bypass_state: bool = False
 
 
 class AudioPlayer:
@@ -35,14 +45,17 @@ class AudioPlayer:
         self.rate_seconds = rate_seconds
         self.output_device_name = (output_device_name or "").strip()
 
-        self.queue: queue.Queue[Path] = queue.Queue()
-        self.priority_queue: queue.Queue[Path] = queue.Queue()
+        self.queue: queue.Queue[_AudioTask] = queue.Queue()
+        self.priority_queue: queue.Queue[_AudioTask] = queue.Queue()
+        self._generation = 0
 
         self.paused = False
         self.stopped = False
 
         self._thread = None
         self._running = False
+        self._closed = False
+        self._queue_lock = threading.Lock()
         self._mixer_lock = threading.RLock()
         self._output_devices = self.list_output_devices()
 
@@ -161,22 +174,29 @@ class AudioPlayer:
     # Controle da fila
     # ==========================
 
-    def enqueue(self, audio_file: Path, priority: bool = False, bypass_state: bool = False):
-        if self.stopped and not bypass_state:
-            return
-
-        if priority:
-            self.priority_queue.put(audio_file)
-            return
-
-        self.queue.put(audio_file)
+    def enqueue(self, audio_file: Path, priority: bool = False, bypass_state: bool = False) -> bool:
+        audio_file = Path(audio_file)
+        with self._queue_lock:
+            if self._closed or (self.stopped and not bypass_state):
+                self._safe_delete(audio_file)
+                return False
+            queue_limit = MAX_PENDING_AUDIO if priority else MAX_PENDING_AUDIO - 1
+            if self.queue_length() >= queue_limit:
+                print("[TTS] fila de reproducao cheia; audio descartado.")
+                self._safe_delete(audio_file)
+                return False
+            target = self.priority_queue if priority else self.queue
+            target.put_nowait(_AudioTask(audio_file, self._generation, bypass_state))
+        return True
 
     def queue_length(self):
         return self.priority_queue.qsize() + self.queue.qsize()
 
     def clear_queue(self):
-        self._drain_queue(self.priority_queue)
-        self._drain_queue(self.queue)
+        with self._queue_lock:
+            self._generation += 1
+            self._drain_queue(self.priority_queue)
+            self._drain_queue(self.queue)
 
     # ==========================
     # Controle de estado
@@ -186,11 +206,13 @@ class AudioPlayer:
         self.rate_seconds = seconds
 
     def pause(self):
-        self.paused = True
+        with self._mixer_lock:
+            self.paused = True
 
     def resume(self):
-        self.paused = False
-        self.stopped = False
+        with self._mixer_lock:
+            self.paused = False
+            self.stopped = False
 
     def stop(self):
         self.stopped = True
@@ -209,7 +231,7 @@ class AudioPlayer:
 
     def start(self):
 
-        if self._running:
+        if self._running or self._closed:
             return
 
         self._running = True
@@ -224,31 +246,67 @@ class AudioPlayer:
     def shutdown(self):
 
         self._running = False
+        self._closed = True
+        self.clear_queue()
 
         try:
             with self._mixer_lock:
                 pygame.mixer.music.stop()
         except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
             print(f"[TTS] falha ao finalizar player: {exc}")
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=2.0)
+        try:
+            with self._mixer_lock:
+                pygame.mixer.quit()
+        except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
+            print(f"[TTS] falha ao finalizar mixer: {exc}")
 
     def _run(self):
 
+        deferred_normal = None
         while self._running:
+
+            if deferred_normal is not None and deferred_normal.generation != self._generation:
+                self._safe_delete(deferred_normal.path)
+                self.queue.task_done()
+                deferred_normal = None
 
             if (self.paused or self.stopped) and self.priority_queue.empty():
                 time.sleep(0.1)
                 continue
 
             try:
-                audio_file = self.priority_queue.get_nowait()
+                task = self.priority_queue.get_nowait()
+                source_queue = self.priority_queue
             except queue.Empty:
-                try:
-                    audio_file = self.queue.get(timeout=0.2)
-                except queue.Empty:
-                    continue
+                if deferred_normal is not None:
+                    task = deferred_normal
+                    deferred_normal = None
+                    source_queue = self.queue
+                else:
+                    try:
+                        task = self.queue.get(timeout=0.2)
+                        source_queue = self.queue
+                    except queue.Empty:
+                        continue
 
+            audio_file = task.path
+            deferred = False
             try:
                 with self._mixer_lock:
+                    if (
+                        not self._running
+                        or task.generation != self._generation
+                        or (self.stopped and not task.bypass_state)
+                    ):
+                        continue
+                    if self.paused and source_queue is self.queue:
+                        # Preserve this item's FIFO position while allowing
+                        # priority audio to pass during the pause.
+                        deferred_normal = task
+                        deferred = True
+                        continue
                     pygame.mixer.music.load(str(audio_file))
                     pygame.mixer.music.play()
 
@@ -259,14 +317,20 @@ class AudioPlayer:
                 print(f"[TTS] erro ao tocar audio: {exc}")
 
             finally:
-                try:
-                    with self._mixer_lock:
-                        pygame.mixer.music.unload()
-                except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
-                    print(f"[TTS] falha ao descarregar audio: {exc}")
-                self._safe_delete(audio_file)
+                if not deferred:
+                    try:
+                        with self._mixer_lock:
+                            pygame.mixer.music.unload()
+                    except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
+                        print(f"[TTS] falha ao descarregar audio: {exc}")
+                    self._safe_delete(audio_file)
+                    source_queue.task_done()
 
             self._sleep_between_items()
+
+        if deferred_normal is not None:
+            self._safe_delete(deferred_normal.path)
+            self.queue.task_done()
 
     # ==========================
     # Limpeza segura
@@ -281,14 +345,18 @@ class AudioPlayer:
                 return
             except PermissionError:
                 time.sleep(0.2)
+            except OSError as exc:
+                print(f"[TTS] nao foi possivel remover audio {path}: {exc}")
+                return
 
-    def _drain_queue(self, q: queue.Queue[Path]):
+    def _drain_queue(self, q: queue.Queue[_AudioTask]):
         while not q.empty():
             try:
-                audio_file = q.get_nowait()
+                task = q.get_nowait()
             except queue.Empty:
                 break
-            self._safe_delete(audio_file)
+            self._safe_delete(task.path)
+            q.task_done()
 
     def _sleep_between_items(self):
         slept = 0.0

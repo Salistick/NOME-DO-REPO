@@ -17,6 +17,8 @@ jobs:
     runs-on: windows-latest
     env:
       TTSLIVE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'manual' }}
+      AWS_EC2_METADATA_DISABLED: "true"
+      PYGAME_HIDE_SUPPORT_PROMPT: "1"
 
     steps:
       - name: Checkout
@@ -28,13 +30,37 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt -r requirements-build.txt
+        run: python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+
+      - name: Install isolated Inno Setup compiler
+        shell: powershell
+        run: |
+          $compiler = .\build_scripts\install_inno_portable.ps1 -TargetDirectory (Join-Path $env:RUNNER_TEMP "ttslive-inno-6.7.4")
+          "INNO_COMPILER=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Validate before packaging
+        run: |
+          python -m ruff check .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Prepare build metadata
         run: python build_scripts/prepare_windows_build_assets.py
 
       - name: Build EXE
         run: python -m PyInstaller --clean bot_live.spec
+
+      - name: Packaged smoke test (offline)
+        shell: powershell
+        run: |
+          $env:TTSLIVE_DATA_DIR = Join-Path $PWD "build_validation\smoke-data"
+          $smokeOutput = Join-Path $PWD "build_validation\smoke.json"
+          New-Item -ItemType Directory -Path (Split-Path -Parent $smokeOutput) -Force | Out-Null
+          $process = Start-Process -FilePath ".\dist\TTSLive.exe" -ArgumentList @("--smoke-test", "--smoke-output", ('"{0}"' -f $smokeOutput)) -WindowStyle Hidden -PassThru
+          if (-not $process.WaitForExit(120000)) { Stop-Process -Id $process.Id -Force; throw "Smoke test timeout" }
+          if ($process.ExitCode -ne 0 -or -not (Test-Path $smokeOutput)) { throw "Packaged smoke test failed" }
+          if (-not (Get-Content $smokeOutput -Raw | ConvertFrom-Json).ok) { throw "Packaged smoke test reported failure" }
 
       - name: Sign EXE if certificate is configured
         shell: powershell
@@ -44,12 +70,11 @@ jobs:
           WINDOWS_CODESIGN_TIMESTAMP_URL: ${{ vars.WINDOWS_CODESIGN_TIMESTAMP_URL }}
         run: .\build_scripts\sign_windows_artifacts.ps1 -Files dist\TTSLive.exe
 
-      - name: Install Inno Setup
-        run: choco install innosetup -y
-
       - name: Build installer
         shell: powershell
-        run: iscc /DTTSLiveVersion=$env:TTSLIVE_VERSION installer.iss
+        run: |
+          & $env:INNO_COMPILER /DTTSLiveVersion=$env:TTSLIVE_VERSION installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Sign installer if certificate is configured
         shell: powershell

@@ -191,7 +191,8 @@ class YouTubeBot:
         except RuntimeError as exc:
             print(f"[YOUTUBE BOT] erro ao aguardar thread: {exc}")
 
-        self._thread = None
+        if self._thread and not self._thread.is_alive():
+            self._thread = None
         self._active_account = None
         self._active_channel = None
         self._active_live = None
@@ -515,26 +516,20 @@ class YouTubeBot:
             raise RuntimeError("Canal YouTube ativo sem channel_id.")
 
         self._status = "procurando live"
-        current_video_id = ((self._active_live or {}).get("video_id") or "").strip()
         live_data = None
 
-        if current_video_id:
-            if self._public_mode:
-                live_data = self.live_resolver.resolve_public_active_live(channel_id)
-            else:
-                live_data = self.live_resolver.resolve_active_live(channel_id=channel_id)
-            if not live_data:
-                print("[YOUTUBE BOT] Live atual nao foi confirmada. Buscando nova live.")
+        if self._public_mode:
+            live_data = self.live_resolver.resolve_public_active_live(channel_id)
+        else:
+            access_token = self._get_active_account_access_token()
+            live_data = self.live_resolver.resolve_active_live(
+                channel_id=channel_id,
+                access_token=access_token,
+            )
 
-        if live_data is None:
-            if self._public_mode:
-                live_data = self.live_resolver.resolve_public_active_live(channel_id)
-            else:
-                access_token = self._get_active_account_access_token()
-                live_data = self.live_resolver.resolve_active_live(
-                    channel_id=channel_id,
-                    access_token=access_token,
-                )
+        # A discovery request may finish after stop() has already returned.
+        if self._manual_stop or not self._should_reconnect:
+            return
 
         current_video_id = ((self._active_live or {}).get("video_id") or "").strip()
         new_video_id = ((live_data or {}).get("video_id") or "").strip()

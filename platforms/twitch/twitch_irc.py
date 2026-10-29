@@ -1,6 +1,8 @@
+import codecs
 import re
 import socket
 import ssl
+import threading
 from collections.abc import Callable
 
 
@@ -62,13 +64,21 @@ class TwitchIRCClient:
         self.anonymous = bool(anonymous)
         self.sock: ssl.SSLSocket | None = None
         self.buffer = ""
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._send_lock = threading.Lock()
         self._running = False
 
     def connect(self) -> None:
         raw_sock = socket.create_connection((self.host, self.port), timeout=30)
         context = ssl.create_default_context()
-        self.sock = context.wrap_socket(raw_sock, server_hostname=self.host)
+        try:
+            self.sock = context.wrap_socket(raw_sock, server_hostname=self.host)
+        except OSError:
+            raw_sock.close()
+            raise
         self.sock.settimeout(1.0)
+        self.buffer = ""
+        self._decoder.reset()
 
         self._running = True
 
@@ -98,9 +108,13 @@ class TwitchIRCClient:
             self.sock = None
 
     def send_line(self, line: str) -> None:
-        if not self.sock:
-            raise RuntimeError("Socket não conectado.")
-        self.sock.sendall((line + "\r\n").encode("utf-8"))
+        if "\r" in line or "\n" in line:
+            raise ValueError("Comando IRC nao pode conter quebras de linha.")
+        with self._send_lock:
+            sock = self.sock
+            if sock is None:
+                raise RuntimeError("Socket não conectado.")
+            sock.sendall((line + "\r\n").encode("utf-8"))
 
     def send_chat_message(self, text: str) -> None:
         if self.anonymous:
@@ -125,7 +139,8 @@ class TwitchIRCClient:
         if not data:
             raise ConnectionError("Conexão IRC encerrada.")
 
-        decoded = data.decode("utf-8", errors="ignore")
+        # TCP can split a UTF-8 character across separate recv() calls.
+        decoded = self._decoder.decode(data)
         self.buffer += decoded
 
         lines = []

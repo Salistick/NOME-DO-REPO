@@ -185,6 +185,9 @@ class TwitchAuth:
             token_data.get("expires_in", 0)
         )
 
+        if not token_data.get("refresh_token"):
+            token_data["refresh_token"] = refresh_token
+
         return token_data
 
     # ==================================
@@ -273,7 +276,7 @@ class TwitchAuth:
             def validate_async():
                 try:
                     enriched = self.enrich_with_validation(token_data)
-                    self.cache.save(enriched)
+                    self.cache.save_if_current(token_data["access_token"], enriched)
                 except TWITCH_AUTH_RECOVERABLE_ERRORS as e:
                     print("[TWITCH AUTH] validacao posterior falhou:", e)
 
@@ -308,7 +311,10 @@ class TwitchAuth:
 
         if cached and cached.get("access_token"):
             now = int(time.time())
-            expires_at = int(cached.get("expires_at", 0))
+            try:
+                expires_at = int(cached.get("expires_at", 0) or 0)
+            except (TypeError, ValueError):
+                expires_at = 0
 
             if expires_at > now + 60 and cached.get("login"):
                 return cached

@@ -1,4 +1,5 @@
 import html
+import math
 import os
 import re
 import unicodedata
@@ -17,6 +18,8 @@ MENTION_PATTERN = re.compile(r"(?<!\S)@\w+")
 COMMAND_PREFIX_PATTERN = re.compile(r"^!\w+\s*", re.IGNORECASE)
 NUMBER_SYMBOLS_PATTERN = re.compile(r"[_~^`|\\]+")
 WORD_PATTERN = re.compile(r"\S+")
+MAX_RAW_CHAT_LENGTH = 1000
+MAX_RAW_USERNAME_LENGTH = 100
 COMPACT_MAGNITUDE_PATTERN = re.compile(r"\b(\d+(?:[.,]\d+)?)(k{1,3}|b|t)\b", re.IGNORECASE)
 ATTACHED_STAT_PATTERN = re.compile(
     r"\b(\d+(?:[.,]\d+)?)(hp|mp|sp|ml|lvl|lv|fps|hz|ms|cd)\b",
@@ -309,7 +312,7 @@ def replace_multiword_gamer_terms(text: str) -> str:
     multi_map = load_pronunciation_rules().get("phrases", {})
 
     for source, target in multi_map.items():
-        result = re.sub(rf"\b{re.escape(source)}\b", target, result, flags=re.IGNORECASE)
+        result = re.sub(rf"\b{re.escape(source)}\b", lambda _, replacement=target: replacement, result, flags=re.IGNORECASE)
 
     return result
 
@@ -368,7 +371,7 @@ def replace_common_terms(text: str) -> str:
 
 
 def sanitize_username_for_tts(name: str) -> str:
-    text = name.strip()
+    text = str(name or "")[:MAX_RAW_USERNAME_LENGTH].strip()
 
     text = text.replace("_", " ")
     text = text.replace("-", " ")
@@ -550,6 +553,9 @@ def convert_money_amounts(text: str) -> str:
         try:
             amount = round(float(raw_value), 2)
         except ValueError:
+            return match.group(0)
+
+        if not math.isfinite(amount):
             return match.group(0)
 
         reais = int(amount)
@@ -795,7 +801,7 @@ def sanitize_chat_text(
     if not text:
         return "", False
 
-    original_text = str(text)
+    original_text = str(text)[:MAX_RAW_CHAT_LENGTH]
     text = clean_chat_noise(original_text)
     _debug_tts_preview("original", original_text)
     _debug_tts_preview("limpo", text)

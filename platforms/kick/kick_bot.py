@@ -42,6 +42,8 @@ class KickBot:
         self._sender_authenticated = False
 
     def get_status(self) -> str:
+        if self._cancel_event.is_set() and self.is_running():
+            return "desconectando"
         if self.pusher_client.is_running():
             pusher_status = self.pusher_client.get_status()
             if pusher_status and pusher_status != "desconectado":
@@ -51,7 +53,10 @@ class KickBot:
         return self._status
 
     def is_running(self) -> bool:
-        return self._running or self.pusher_client.is_running()
+        return bool(
+            self._running or (self._thread and self._thread.is_alive())
+            or self.pusher_client.is_running()
+        )
 
     def has_saved_auth(self) -> bool:
         return self.auth.has_saved_auth()
@@ -101,11 +106,12 @@ class KickBot:
             except RuntimeError as exc:
                 print(f"[KICK BOT] erro ao aguardar thread Kick: {exc}")
 
-        self._thread = None
+        if not thread or not thread.is_alive():
+            self._thread = None
         self._channel_override = ""
         self._public_mode = False
         self._sender_authenticated = False
-        self._status = "desconectado"
+        self._status = "desconectando" if self.is_running() else "desconectado"
 
     def disconnect_and_forget(self):
         self.stop()
@@ -150,15 +156,21 @@ class KickBot:
                     )
                     return
 
+            if cancel_event.is_set():
+                return
             self._status = "conectando WebSocket Kick"
             self.pusher_client.send_chat_callback = (
                 self.send_chat_message if self._sender_authenticated else None
             )
-            self.pusher_client.start(channel_slug)
+            self.pusher_client.start(channel_slug, cancel_event=cancel_event)
             if cancel_event.is_set():
+                self.pusher_client.stop()
                 return
 
-            if self.pusher_client.wait_until_connected(timeout=10.0):
+            connected = self.pusher_client.wait_until_connected(timeout=10.0)
+            if cancel_event.is_set():
+                return
+            if connected:
                 self._status = f"monitorando @{channel_slug}"
             else:
                 self._status = self.pusher_client.get_status() or "conectando WebSocket Kick"
@@ -175,6 +187,8 @@ class KickBot:
         finally:
             if not self.pusher_client.is_running():
                 self._running = False
+            if cancel_event.is_set():
+                self._status = "desconectado"
 
     def send_chat_message(self, text: str) -> bool:
         if self._public_mode:

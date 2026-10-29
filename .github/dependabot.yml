@@ -1,0 +1,22 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "10:00"
+      timezone: America/Sao_Paulo
+    open-pull-requests-limit: 5
+    groups:
+      aws-sdk:
+        patterns: [boto3, botocore, s3transfer]
+      packaging:
+        patterns: [pyinstaller, pyinstaller-hooks-contrib, pip-tools, setuptools, wheel]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "10:00"
+      timezone: America/Sao_Paulo

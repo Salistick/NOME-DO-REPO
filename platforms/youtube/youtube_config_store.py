@@ -1,10 +1,14 @@
 import json
+import threading
 from pathlib import Path
+
+from .youtube_json import atomic_write_json
 
 
 class YouTubeConfigStore:
     def __init__(self, filepath: Path):
         self.filepath = Path(filepath)
+        self._lock = threading.RLock()
 
     def _default_data(self) -> dict:
         return {
@@ -12,6 +16,10 @@ class YouTubeConfigStore:
         }
 
     def load(self) -> dict:
+        with self._lock:
+            return self._load_unlocked()
+
+    def _load_unlocked(self) -> dict:
         if not self.filepath.exists():
             return self._default_data()
 
@@ -33,16 +41,18 @@ class YouTubeConfigStore:
         }
 
     def save(self, data: dict) -> None:
-        self.filepath.parent.mkdir(parents=True, exist_ok=True)
-
         payload = {
             "accounts": data.get("accounts", []),
         }
 
-        with open(self.filepath, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
+        with self._lock:
+            atomic_write_json(self.filepath, payload)
 
     def clear(self) -> None:
+        with self._lock:
+            self._clear_unlocked()
+
+    def _clear_unlocked(self) -> None:
         try:
             if self.filepath.exists():
                 self.filepath.unlink()
@@ -123,6 +133,12 @@ class YouTubeConfigStore:
         name: str,
         channels: list[dict],
     ) -> None:
+        with self._lock:
+            self._upsert_account_unlocked(account_id, email, name, channels)
+
+    def _upsert_account_unlocked(
+        self, account_id: str, email: str, name: str, channels: list[dict],
+    ) -> None:
         account_id = (account_id or "").strip()
         email = (email or "").strip()
         name = (name or "").strip()
@@ -170,15 +186,16 @@ class YouTubeConfigStore:
         self.save(data)
 
     def remove_account_by_index(self, index: int) -> bool:
-        data = self.load()
-        accounts = data["accounts"]
+        with self._lock:
+            data = self.load()
+            accounts = data["accounts"]
 
-        if index < 0 or index >= len(accounts):
-            return False
+            if index < 0 or index >= len(accounts):
+                return False
 
-        accounts.pop(index)
-        self.save(data)
-        return True
+            accounts.pop(index)
+            self.save(data)
+            return True
 
     def remove_account_by_display_index(self, display_index: int) -> bool:
         if display_index <= 0:

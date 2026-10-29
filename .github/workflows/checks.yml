@@ -1,0 +1,41 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    env:
+      AWS_EC2_METADATA_DISABLED: "true"
+      PYGAME_HIDE_SUPPORT_PROMPT: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            requirements-build.txt
+      - name: Install dependencies
+        run: python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+      - name: Dependency consistency
+        run: python -m pip check
+      - name: Lint
+        run: python -m ruff check .
+      - name: Prepare isolated installer compiler
+        shell: powershell
+        run: |
+          $compiler = .\build_scripts\install_inno_portable.ps1 -TargetDirectory (Join-Path $env:RUNNER_TEMP "ttslive-inno-6.7.4")
+          "INNO_COMPILER=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Regression tests (offline)
+        run: python -m unittest discover -s tests -v

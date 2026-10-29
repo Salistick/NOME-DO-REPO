@@ -1,5 +1,8 @@
 import json
+import threading
 from pathlib import Path
+
+from persistence import atomic_write_json
 
 
 def _default_state() -> dict:
@@ -26,31 +29,39 @@ def _default_state() -> dict:
 
 class AppStateStore:
     def __init__(self, filepath: Path):
-        self.filepath = filepath
+        self.filepath = Path(filepath)
+        self._lock = threading.Lock()
 
     def load(self) -> dict:
-        if not self.filepath.exists():
-            return _default_state()
+        with self._lock:
+            try:
+                with open(self.filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                return _default_state()
 
-        try:
-            with open(self.filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        if not isinstance(data, dict):
             return _default_state()
 
         defaults = _default_state()
-        data.setdefault("platforms", {})
-        data["platforms"].setdefault("twitch", defaults["platforms"]["twitch"].copy())
-        data["platforms"].setdefault("youtube", defaults["platforms"]["youtube"].copy())
-        data["platforms"].setdefault("kick", defaults["platforms"]["kick"].copy())
-        data["platforms"]["twitch"].setdefault("channel_name", "")
-        data["platforms"]["youtube"].setdefault("channel_name", "")
-        data["platforms"]["kick"].setdefault("channel_name", "")
-        data.setdefault("window", {})
-        data["window"].setdefault("main_geometry", None)
+        if not isinstance(data.get("platforms"), dict):
+            data["platforms"] = {}
+        for platform, default in defaults["platforms"].items():
+            state = data["platforms"].get(platform)
+            if not isinstance(state, dict):
+                state = default.copy()
+                data["platforms"][platform] = state
+            for key, value in default.items():
+                if type(state.get(key)) is not type(value):
+                    state[key] = value
+            if "disabled" in state and not isinstance(state["disabled"], bool):
+                state["disabled"] = False
+        if not isinstance(data.get("window"), dict):
+            data["window"] = {}
+        if not isinstance(data["window"].get("main_geometry"), str):
+            data["window"]["main_geometry"] = None
         return data
 
     def save(self, data: dict) -> None:
-        self.filepath.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        with self._lock:
+            atomic_write_json(self.filepath, data)

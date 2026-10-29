@@ -29,6 +29,7 @@ class TwitchChatSender:
     def __init__(self):
         self._lock = threading.Lock()
         self._client = None
+        self._reader_thread: threading.Thread | None = None
         self._connected_channel = ""
         self._token_data = {
             "login": TWITCH_BOT_LOGIN,
@@ -93,9 +94,16 @@ class TwitchChatSender:
 
         self._client = None
         self._connected_channel = ""
+        reader = self._reader_thread
+        if reader and reader is not threading.current_thread():
+            reader.join(timeout=1.5)
+        self._reader_thread = None
 
     def _ensure_connected_unlocked(self, channel_name: str):
-        if self._client and self._connected_channel == channel_name:
+        if (
+            self._client and self._connected_channel == channel_name
+            and self._reader_thread and self._reader_thread.is_alive()
+        ):
             return
 
         self._disconnect_unlocked()
@@ -113,6 +121,14 @@ class TwitchChatSender:
             channel_name=channel_name,
         )
         self._client.connect()
+        # A persistent IRC sender must consume server frames and answer PING.
+        self._reader_thread = threading.Thread(
+            target=self._client.listen_forever,
+            args=(lambda _message: None,),
+            daemon=True,
+            name="TwitchSenderReaderThread",
+        )
+        self._reader_thread.start()
         time.sleep(1.0)
         self._connected_channel = channel_name
 

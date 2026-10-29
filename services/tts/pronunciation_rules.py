@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from config import TTS_PRONUNCIATION_FILE
+from persistence import atomic_write_json
 
 DEFAULT_PRONUNCIATION_RULES = {
     "single_words": {
@@ -147,10 +148,7 @@ def _write_default_file(path: Path) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
-            path.write_text(
-                json.dumps(_load_default_rules(), ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            atomic_write_json(path, _load_default_rules())
     except OSError as exc:
         print(f"[TTS] nao foi possivel criar arquivo de pronuncia padrao: {exc}")
 

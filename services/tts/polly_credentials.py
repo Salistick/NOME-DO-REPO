@@ -1,7 +1,7 @@
-import ctypes
 import json
-import os
+import threading
 import time
+import uuid
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +10,13 @@ from typing import Any
 import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
+
+from persistence import atomic_write_bytes
+from secure_storage import (
+    SecureStorageError,
+    protect_secret_bytes as _protect_secret_bytes,
+    unprotect_secret_bytes as _unprotect_secret_bytes,
+)
 
 from config import (
     AWS_POLLY_CONFIG_FILE,
@@ -24,6 +31,14 @@ POLLY_SOURCE_ACCESS_KEY = "access_key"
 POLLY_SOURCE_SSO = "sso"
 POLLY_SOURCE_PROFILE = "profile"
 SUPPORTED_POLLY_SOURCES = {POLLY_SOURCE_ACCESS_KEY, POLLY_SOURCE_SSO, POLLY_SOURCE_PROFILE}
+_STORE_LOCKS: dict[str, threading.RLock] = {}
+_STORE_LOCKS_GUARD = threading.Lock()
+
+
+def _store_lock(path: Path):
+    key = str(path.resolve()).casefold()
+    with _STORE_LOCKS_GUARD:
+        return _STORE_LOCKS.setdefault(key, threading.RLock())
 
 SSO_ACCOUNT_SCOPE = "sso:account:access"
 SSO_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
@@ -46,6 +61,15 @@ POLLY_CREDENTIAL_RECOVERABLE_ERRORS = (
 
 class PollyCredentialsError(RuntimeError):
     pass
+
+
+class PollyOperationCancelled(PollyCredentialsError):
+    pass
+
+
+def _check_cancelled(cancel_event=None):
+    if cancel_event is not None and cancel_event.is_set():
+        raise PollyOperationCancelled("Operacao cancelada.")
 
 
 @dataclass
@@ -108,30 +132,107 @@ class PollyCredentialStore:
     ):
         self.config_file = Path(config_file)
         self.secret_file = Path(secret_file)
+        self.bundle_file = self.secret_file.with_name(f"{self.secret_file.stem}.bundle{self.secret_file.suffix}")
+        self._lock = _store_lock(self.bundle_file)
+        self._pending_sso_secret: dict[str, Any] | None = None
         self.config_file.parent.mkdir(parents=True, exist_ok=True)
 
     def load_config(self) -> PollyCredentialConfig | None:
+        with self._lock:
+            snapshot = self._load_snapshot()
+            return PollyCredentialConfig.from_dict(snapshot["config"]) if snapshot else None
+
+    def _load_snapshot(self) -> dict[str, Any] | None:
+        """Read one coherent credential generation, migrating legacy pairs once.
+
+        A present but inaccessible bundle must never fall back to an older IAM
+        identity. The untouched legacy pair remains available for explicit recovery.
+        Callers hold the per-bundle lock across reads and commits.
+        """
+        if self.bundle_file.exists():
+            try:
+                raw = json.loads(unprotect_secret_bytes(self.bundle_file.read_bytes()).decode("utf-8"))
+                if (
+                    not isinstance(raw, dict) or raw.get("version") != 1
+                    or not isinstance(raw.get("secret"), dict)
+                    or not isinstance(raw.get("revision"), str) or not raw["revision"]
+                    or PollyCredentialConfig.from_dict(raw.get("config")) is None
+                ):
+                    raise ValueError("Bundle invalido")
+                return raw
+            except (OSError, UnicodeError, ValueError, TypeError, OverflowError, PollyCredentialsError) as exc:
+                raise PollyCredentialsError(
+                    "Nao foi possivel ler o bundle protegido do Amazon Polly. "
+                    "As credenciais legadas foram preservadas para recuperacao; "
+                    "restaure o arquivo com o mesmo usuario Windows ou configure novamente."
+                ) from exc
+
         try:
             if not self.config_file.exists():
                 return None
             raw = json.loads(self.config_file.read_text(encoding="utf-8"))
-            return PollyCredentialConfig.from_dict(raw)
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            config = PollyCredentialConfig.from_dict(raw)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError, OverflowError):
             return None
+        if config is None:
+            return None
+        if config.source != POLLY_SOURCE_PROFILE and not self.secret_file.exists():
+            return None
+        secret = self._read_legacy_secret() if config.source != POLLY_SOURCE_PROFILE else {}
+        return self._commit(config, secret)
+
+    def _commit(self, config: PollyCredentialConfig, secret: dict[str, Any]) -> dict[str, Any]:
+        snapshot = {
+            "version": 1,
+            "revision": uuid.uuid4().hex,
+            "config": config.to_dict(),
+            "secret": secret,
+        }
+        payload = json.dumps(snapshot, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        protected = protect_secret_bytes(payload)
+        if unprotect_secret_bytes(protected) != payload:
+            raise PollyCredentialsError("Falha ao verificar o bundle protegido; configuracao anterior preservada.")
+        # One replace commits metadata and secret together. Protection or write
+        # failures leave the complete previous generation intact.
+        atomic_write_bytes(self.bundle_file, protected)
+        return snapshot
+
+    def recover_legacy_configuration(self) -> None:
+        """Explicitly restore the retained legacy identity, never as a fallback."""
+        with self._lock:
+            try:
+                config = PollyCredentialConfig.from_dict(json.loads(self.config_file.read_text(encoding="utf-8")))
+            except (OSError, ValueError, TypeError, OverflowError) as exc:
+                raise PollyCredentialsError("Configuracao legada Polly indisponivel; original preservado.") from exc
+            if config is None:
+                raise PollyCredentialsError("Configuracao legada Polly invalida; original preservado.")
+            secret = self._read_legacy_secret() if config.source != POLLY_SOURCE_PROFILE else {}
+            if (
+                (config.source == POLLY_SOURCE_ACCESS_KEY and not (config.access_key_id and secret.get("secret_access_key")))
+                or (config.source == POLLY_SOURCE_SSO and not (config.sso_account_id and config.sso_role_name and secret.get("sso_access_token")))
+                or (config.source == POLLY_SOURCE_PROFILE and not config.profile_name)
+            ):
+                raise PollyCredentialsError("Credenciais legadas Polly incompletas; original preservado.")
+            if self.bundle_file.exists():
+                atomic_write_bytes(self.bundle_file.with_name(self.bundle_file.name + ".recovery.bak"), self.bundle_file.read_bytes())
+            self._commit(config, secret)
 
     def has_saved_configuration(self) -> bool:
-        config = self.load_config()
-        if not config:
+        with self._lock:
+            snapshot = self._load_snapshot()
+        if snapshot is None:
             return False
+        config = PollyCredentialConfig.from_dict(snapshot["config"])
+        secret = snapshot["secret"]
         if config.source == POLLY_SOURCE_ACCESS_KEY:
-            return bool(config.access_key_id and self.secret_file.exists())
+            return bool(config.access_key_id and secret.get("secret_access_key"))
         if config.source == POLLY_SOURCE_SSO:
             return bool(
                 config.sso_start_url
                 and config.sso_region
                 and config.sso_account_id
                 and config.sso_role_name
-                and self.secret_file.exists()
+                and secret.get("sso_access_token")
             )
         if config.source == POLLY_SOURCE_PROFILE:
             return bool(config.profile_name)
@@ -152,15 +253,14 @@ class PollyCredentialStore:
             "secret_access_key": secret_access_key,
             "session_token": str(session_token or "").strip(),
         }
-        self._write_protected_secret(secret_data)
-
         config = PollyCredentialConfig(
             source=POLLY_SOURCE_ACCESS_KEY,
             region=region,
             access_key_id=access_key_id,
             updated_at=int(time.time()),
         )
-        self._write_config(config)
+        with self._lock:
+            self._commit(config, secret_data)
 
     def save_sso(
         self,
@@ -187,7 +287,19 @@ class PollyCredentialStore:
             sso_role_name=role_name,
             updated_at=int(time.time()),
         )
-        self._write_config(config)
+        with self._lock:
+            secret = self._pending_sso_secret
+            if secret is None:
+                current = self._load_snapshot()
+                previous = PollyCredentialConfig.from_dict(current["config"]) if current else None
+                if (
+                    previous is None or previous.source != POLLY_SOURCE_SSO
+                    or previous.sso_start_url != start_url or previous.sso_region != sso_region
+                ):
+                    raise PollyCredentialsError("Faca login AWS antes de salvar a conta/role.")
+                secret = current["secret"]
+            self._commit(config, secret)
+            self._pending_sso_secret = None
 
     def save_profile(self, region: str, profile_name: str) -> None:
         region = self._require_text(region, "Regiao AWS")
@@ -199,27 +311,29 @@ class PollyCredentialStore:
             profile_name=profile_name,
             updated_at=int(time.time()),
         )
-        self._write_config(config)
-
-        try:
-            self.secret_file.unlink(missing_ok=True)
-        except OSError as exc:
-            print(f"[POLLY] nao foi possivel remover segredo antigo: {exc}")
+        with self._lock:
+            self._commit(config, {})
 
     def clear(self) -> None:
-        for path in (self.config_file, self.secret_file):
-            try:
-                path.unlink(missing_ok=True)
-            except OSError as exc:
-                print(f"[POLLY] nao foi possivel limpar {path}: {exc}")
+        with self._lock:
+            for path in (
+                self.config_file, self.secret_file, self.bundle_file,
+                self.bundle_file.with_name(self.bundle_file.name + ".recovery.bak"),
+            ):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    print(f"[POLLY] nao foi possivel limpar {path}: {exc}")
 
     def create_client(self):
-        config = self.load_config()
-        if not config:
+        with self._lock:
+            snapshot = self._load_snapshot()
+        if snapshot is None:
             raise PollyCredentialsError("Amazon Polly ainda nao foi configurado.")
+        config = PollyCredentialConfig.from_dict(snapshot["config"])
 
         if config.source == POLLY_SOURCE_ACCESS_KEY:
-            secret_data = self._read_protected_secret()
+            secret_data = snapshot["secret"]
             secret_access_key = str(secret_data.get("secret_access_key") or "").strip()
             session_token = str(secret_data.get("session_token") or "").strip()
 
@@ -237,11 +351,11 @@ class PollyCredentialStore:
             return boto3.client("polly", config=BOTO_CLIENT_CONFIG, **kwargs)
 
         if config.source == POLLY_SOURCE_SSO:
-            return self.create_sso_polly_client(config)
+            return self.create_sso_polly_client(config, snapshot=snapshot)
 
         if config.source == POLLY_SOURCE_PROFILE:
             session = boto3.Session(profile_name=config.profile_name, region_name=config.region)
-            return session.client("polly")
+            return session.client("polly", config=BOTO_CLIENT_CONFIG)
 
         raise PollyCredentialsError("Origem de credenciais Polly invalida.")
 
@@ -266,21 +380,31 @@ class PollyCredentialStore:
             kwargs["aws_session_token"] = session_token
 
         client = boto3.client("polly", config=BOTO_CLIENT_CONFIG, **kwargs)
-        validate_polly_client(client)
+        try:
+            validate_polly_client(client)
+        finally:
+            client.close()
 
     def validate_profile(self, region: str, profile_name: str) -> None:
         region = self._require_text(region, "Regiao AWS")
         profile_name = self._require_text(profile_name, "Nome do perfil AWS")
 
         session = boto3.Session(profile_name=profile_name, region_name=region)
-        validate_polly_client(session.client("polly", config=BOTO_CLIENT_CONFIG))
+        client = session.client("polly", config=BOTO_CLIENT_CONFIG)
+        try:
+            validate_polly_client(client)
+        finally:
+            client.close()
 
     def start_sso_browser_login(
         self,
         start_url: str,
         sso_region: str,
         status_callback=None,
+        cancel_event=None,
     ) -> str:
+        _check_cancelled(cancel_event)
+        self._pending_sso_secret = None
         start_url = self._require_text(start_url, "URL do portal AWS")
         sso_region = self._require_text(sso_region, "Regiao do IAM Identity Center")
 
@@ -295,6 +419,7 @@ class PollyCredentialStore:
             clientSecret=registration["clientSecret"],
             startUrl=start_url,
         )
+        _check_cancelled(cancel_event)
 
         login_url = authorization.get("verificationUriComplete") or authorization.get("verificationUri")
         if not login_url:
@@ -310,20 +435,25 @@ class PollyCredentialStore:
             registration=registration,
             authorization=authorization,
             status_callback=status_callback,
+            cancel_event=cancel_event,
         )
-        self._write_protected_secret(access_data)
+        _check_cancelled(cancel_event)
+        # Commit only after the user selects and validates an account/role.
+        self._pending_sso_secret = access_data
         return access_data["sso_access_token"]
 
-    def list_sso_accounts(self, sso_region: str, access_token: str) -> list[dict[str, str]]:
+    def list_sso_accounts(self, sso_region: str, access_token: str, cancel_event=None) -> list[dict[str, str]]:
         sso = boto3.client("sso", region_name=sso_region, config=BOTO_CLIENT_CONFIG)
         accounts: list[dict[str, str]] = []
         next_token = None
 
         while True:
+            _check_cancelled(cancel_event)
             kwargs = {"accessToken": access_token, "maxResults": 100}
             if next_token:
                 kwargs["nextToken"] = next_token
             response = sso.list_accounts(**kwargs)
+            _check_cancelled(cancel_event)
             accounts.extend(response.get("accountList") or [])
             next_token = response.get("nextToken")
             if not next_token:
@@ -334,6 +464,7 @@ class PollyCredentialStore:
         sso_region: str,
         access_token: str,
         account_id: str,
+        cancel_event=None,
     ) -> list[dict[str, str]]:
         account_id = self._require_text(account_id, "Conta AWS")
         sso = boto3.client("sso", region_name=sso_region, config=BOTO_CLIENT_CONFIG)
@@ -341,6 +472,7 @@ class PollyCredentialStore:
         next_token = None
 
         while True:
+            _check_cancelled(cancel_event)
             kwargs = {
                 "accessToken": access_token,
                 "accountId": account_id,
@@ -349,6 +481,7 @@ class PollyCredentialStore:
             if next_token:
                 kwargs["nextToken"] = next_token
             response = sso.list_account_roles(**kwargs)
+            _check_cancelled(cancel_event)
             roles.extend(response.get("roleList") or [])
             next_token = response.get("nextToken")
             if not next_token:
@@ -369,10 +502,18 @@ class PollyCredentialStore:
             account_id=account_id,
             role_name=role_name,
         )
-        validate_polly_client(client)
+        try:
+            validate_polly_client(client)
+        finally:
+            client.close()
 
-    def create_sso_polly_client(self, config: PollyCredentialConfig):
-        access_token = self._get_sso_access_token(config)
+    def create_sso_polly_client(self, config: PollyCredentialConfig, snapshot=None):
+        if snapshot is None:
+            with self._lock:
+                snapshot = self._load_snapshot()
+            if snapshot is None or snapshot["config"] != config.to_dict():
+                raise PollyCredentialsError("Configuracao Polly alterada; recarregue o cliente.")
+        access_token = self._get_sso_access_token(config, snapshot=snapshot)
         return self.create_sso_polly_client_from_token(
             region=config.region,
             sso_region=config.sso_region,
@@ -437,15 +578,17 @@ class PollyCredentialStore:
         registration: dict[str, Any],
         authorization: dict[str, Any],
         status_callback=None,
+        cancel_event=None,
     ) -> dict[str, Any]:
-        expires_at = time.time() + int(authorization.get("expiresIn") or 600)
+        expires_at = time.monotonic() + int(authorization.get("expiresIn") or 600)
         interval = max(1, int(authorization.get("interval") or 5))
         device_code = authorization.get("deviceCode")
 
         if not device_code:
             raise PollyCredentialsError("AWS nao retornou codigo de dispositivo.")
 
-        while time.time() < expires_at:
+        while time.monotonic() < expires_at:
+            _check_cancelled(cancel_event)
             try:
                 if status_callback:
                     status_callback("Aguardando login no navegador...")
@@ -456,16 +599,17 @@ class PollyCredentialStore:
                     grantType=SSO_DEVICE_GRANT,
                     deviceCode=device_code,
                 )
+                _check_cancelled(cancel_event)
                 return self._build_sso_secret_data(registration, response)
 
             except ClientError as exc:
                 code = exc.response.get("Error", {}).get("Code", "")
                 if code in {"AuthorizationPendingException", "authorization_pending"}:
-                    time.sleep(interval)
+                    self._wait_for_sso_poll(interval, cancel_event)
                     continue
                 if code in {"SlowDownException", "slow_down"}:
                     interval += 5
-                    time.sleep(interval)
+                    self._wait_for_sso_poll(interval, cancel_event)
                     continue
                 if code in {"ExpiredTokenException", "expired_token"}:
                     raise PollyCredentialsError("O login AWS expirou. Tente novamente.") from exc
@@ -473,21 +617,34 @@ class PollyCredentialStore:
 
         raise PollyCredentialsError("Tempo de login AWS expirado.")
 
-    def _get_sso_access_token(self, config: PollyCredentialConfig) -> str:
-        secret_data = self._read_protected_secret()
+    @staticmethod
+    def _wait_for_sso_poll(interval: float, cancel_event=None):
+        if cancel_event is None:
+            time.sleep(interval)
+        elif cancel_event.wait(interval):
+            _check_cancelled(cancel_event)
+
+    def _get_sso_access_token(self, config: PollyCredentialConfig, snapshot=None) -> str:
+        if snapshot is None:
+            with self._lock:
+                snapshot = self._load_snapshot()
+        if snapshot is None:
+            raise PollyCredentialsError("Credenciais Polly nao encontradas.")
+        secret_data = snapshot["secret"]
         access_token = str(secret_data.get("sso_access_token") or "").strip()
         expires_at = int(secret_data.get("sso_token_expires_at") or 0)
 
         if access_token and expires_at > int(time.time()) + 60:
             return access_token
 
-        refreshed = self._refresh_sso_access_token(config, secret_data)
+        refreshed = self._refresh_sso_access_token(config, secret_data, expected_revision=snapshot["revision"])
         return str(refreshed.get("sso_access_token") or "").strip()
 
     def _refresh_sso_access_token(
         self,
         config: PollyCredentialConfig,
         secret_data: dict[str, Any],
+        expected_revision: str | None = None,
     ) -> dict[str, Any]:
         refresh_token = str(secret_data.get("sso_refresh_token") or "").strip()
         client_id = str(secret_data.get("sso_client_id") or "").strip()
@@ -521,7 +678,10 @@ class PollyCredentialStore:
             response,
             fallback_refresh_token=refresh_token,
         )
-        self._write_protected_secret(updated)
+        with self._lock:
+            current = self._load_snapshot()
+            if current is not None and current["revision"] == expected_revision:
+                self._commit(config, updated)
         return updated
 
     @staticmethod
@@ -540,18 +700,14 @@ class PollyCredentialStore:
             "sso_client_secret_expires_at": int(registration.get("clientSecretExpiresAt") or 0),
         }
 
-    def _write_config(self, config: PollyCredentialConfig) -> None:
-        self.config_file.write_text(
-            json.dumps(config.to_dict(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-    def _write_protected_secret(self, data: dict[str, Any]) -> None:
-        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        protected = protect_secret_bytes(payload)
-        self.secret_file.write_bytes(protected)
-
     def _read_protected_secret(self) -> dict[str, Any]:
+        with self._lock:
+            snapshot = self._load_snapshot()
+            if snapshot is not None:
+                return snapshot["secret"]
+        return self._read_legacy_secret()
+
+    def _read_legacy_secret(self) -> dict[str, Any]:
         if not self.secret_file.exists():
             raise PollyCredentialsError("Arquivo protegido de credenciais Polly nao encontrado.")
 
@@ -579,6 +735,8 @@ def validate_polly_client(client) -> None:
         SampleRate=POLLY_SAMPLE_RATE,
     )
     stream = response.get("AudioStream")
+    if stream is None:
+        raise PollyCredentialsError("Polly nao retornou audio na validacao.")
     if stream:
         try:
             stream.read(1)
@@ -589,76 +747,15 @@ def validate_polly_client(client) -> None:
                 print(f"[POLLY] falha ao fechar stream de validacao: {exc}")
 
 
-class _DATA_BLOB(ctypes.Structure):
-    _fields_ = [
-        ("cbData", ctypes.c_ulong),
-        ("pbData", ctypes.c_void_p),
-    ]
-
-
 def protect_secret_bytes(data: bytes) -> bytes:
-    if os.name != "nt":
-        raise PollyCredentialsError("Protecao local de credenciais requer Windows.")
-    return _crypt_protect(data)
+    try:
+        return _protect_secret_bytes(data)
+    except SecureStorageError as exc:
+        raise PollyCredentialsError(str(exc)) from exc
 
 
 def unprotect_secret_bytes(data: bytes) -> bytes:
-    if os.name != "nt":
-        raise PollyCredentialsError("Leitura de credenciais protegidas requer Windows.")
-    return _crypt_unprotect(data)
-
-
-def _crypt_protect(data: bytes) -> bytes:
-    crypt32 = ctypes.windll.crypt32
-    kernel32 = ctypes.windll.kernel32
-    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
-    kernel32.LocalFree.restype = ctypes.c_void_p
-
-    in_buffer = ctypes.create_string_buffer(data)
-    in_blob = _DATA_BLOB(len(data), ctypes.cast(in_buffer, ctypes.c_void_p))
-    out_blob = _DATA_BLOB()
-
-    ok = crypt32.CryptProtectData(
-        ctypes.byref(in_blob),
-        "TTSLive Amazon Polly",
-        None,
-        None,
-        None,
-        0,
-        ctypes.byref(out_blob),
-    )
-    if not ok:
-        raise PollyCredentialsError("Falha ao proteger credenciais Polly no Windows.")
-
     try:
-        return ctypes.string_at(out_blob.pbData, out_blob.cbData)
-    finally:
-        kernel32.LocalFree(out_blob.pbData)
-
-
-def _crypt_unprotect(data: bytes) -> bytes:
-    crypt32 = ctypes.windll.crypt32
-    kernel32 = ctypes.windll.kernel32
-    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
-    kernel32.LocalFree.restype = ctypes.c_void_p
-
-    in_buffer = ctypes.create_string_buffer(data)
-    in_blob = _DATA_BLOB(len(data), ctypes.cast(in_buffer, ctypes.c_void_p))
-    out_blob = _DATA_BLOB()
-
-    ok = crypt32.CryptUnprotectData(
-        ctypes.byref(in_blob),
-        None,
-        None,
-        None,
-        None,
-        0,
-        ctypes.byref(out_blob),
-    )
-    if not ok:
-        raise PollyCredentialsError("Falha ao abrir credenciais Polly protegidas.")
-
-    try:
-        return ctypes.string_at(out_blob.pbData, out_blob.cbData)
-    finally:
-        kernel32.LocalFree(out_blob.pbData)
+        return _unprotect_secret_bytes(data)
+    except SecureStorageError as exc:
+        raise PollyCredentialsError(str(exc)) from exc

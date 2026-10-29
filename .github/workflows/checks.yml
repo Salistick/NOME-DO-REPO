@@ -27,7 +27,8 @@ jobs:
             requirements-dev.txt
             requirements-build.txt
       - name: Install dependencies
-        run: python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
       - name: Dependency consistency
         run: python -m pip check
       - name: Lint

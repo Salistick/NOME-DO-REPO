@@ -7,7 +7,7 @@ on:
       - "v*"
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 permissions:
   contents: write
@@ -30,7 +30,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
 
       - name: Install isolated Inno Setup compiler
         shell: powershell

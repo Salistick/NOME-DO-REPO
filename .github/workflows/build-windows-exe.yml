@@ -86,13 +86,13 @@ jobs:
         run: .\build_scripts\sign_windows_artifacts.ps1 -Files dist\TTSLiveInstaller.exe
 
       - name: Upload artifact exe
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: TTSLive-windows-exe
           path: dist/TTSLive.exe
 
       - name: Upload artifact installer
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: TTSLive-installer
           path: dist/TTSLiveInstaller.exe

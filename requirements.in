@@ -2,7 +2,7 @@
 python-dotenv==1.2.4
 requests==2.34.2
 websocket-client==1.9.2
-boto3==1.43.121
+boto3==1.43.122
 pygame==2.6.1
 pytchat==0.5.5
 yt-dlp==2026.10.26

@@ -1,5 +1,12 @@
 # Histórico de mudanças
 
+## v1.2.1 — 2026-11-06
+
+- Os comandos `!ms` e `!mm` usam novas pausas de locução para vírgula (200 ms), ponto e vírgula e dois-pontos (400 ms), ponto final, interrogação e exclamação (600 ms) e reticências `…` ou `...` (750 ms).
+- Uma linha em branco marca a mudança de parágrafo e gera uma única pausa de 1 segundo, mesmo após outra pontuação. A pausa entre parágrafos é preservada ao limitar o número de palavras.
+
+[Comparação completa com v1.2.0](https://github.com/Salistick/NOME-DO-REPO/compare/v1.2.0...v1.2.1).
+
 ## v1.2.0 — 2026-10-29
 
 Reúne as melhorias de confiabilidade, proteção de credenciais e distribuição implementadas desde a v1.1.12.

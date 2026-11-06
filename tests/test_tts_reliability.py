@@ -6,6 +6,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
+from xml.etree import ElementTree
 
 from botocore.exceptions import ClientError, EndpointConnectionError
 
@@ -368,6 +369,35 @@ class TTSConfigurationTests(unittest.TestCase):
         ssml = build_polly_ssml("hello <speak> & world")
         self.assertIn("&lt;speak&gt;", ssml)
         self.assertEqual(ssml.count("<speak>"), 1)
+
+    def test_ssml_applies_the_configured_punctuation_pauses(self):
+        text = "Oi, pessoal; aviso: começou. Prontos? Ótimo! Aguarde... agora… terminou"
+        ssml = ElementTree.fromstring(build_polly_ssml(text))
+
+        self.assertEqual(
+            [pause.get("time") for pause in ssml.findall("break")],
+            ["200ms", "400ms", "400ms", "600ms", "600ms", "600ms", "750ms", "750ms"],
+        )
+
+    def test_ssml_keeps_the_pause_after_final_sentence_punctuation(self):
+        for mark in (".", "?", "!"):
+            with self.subTest(mark=mark):
+                ssml = ElementTree.fromstring(build_polly_ssml(f"Pronto{mark}"))
+
+                self.assertEqual(ssml.text.strip(), f"Pronto{mark}")
+                self.assertEqual([pause.get("time") for pause in ssml.findall("break")], ["600ms"])
+
+    def test_paragraph_pause_survives_chat_sanitizing_and_word_limit(self):
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=newline):
+                text = f"Primeira.{newline} {newline}Segunda{newline}linha continua"
+                sanitized, truncated = sanitize_chat_text(text, max_words=3)
+                ssml = ElementTree.fromstring(build_polly_ssml(sanitized))
+
+                self.assertTrue(truncated)
+                pauses = ssml.findall("break")
+                self.assertEqual([pause.get("time") for pause in pauses], ["1000ms"])
+                self.assertEqual(pauses[0].tail.strip(), "Segunda linha blablabla fala demais")
 
     def test_custom_pronunciation_is_literal_text(self):
         with patch("services.tts.text_sanitizer.load_pronunciation_rules", return_value={"phrases": {"custom term": r"say \q"}}):

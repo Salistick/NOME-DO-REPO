@@ -12,6 +12,8 @@ URL_PATTERN = re.compile(
 )
 
 MULTISPACE_PATTERN = re.compile(r"\s+")
+PARAGRAPH_SEPARATOR = "\u2029"
+PARAGRAPH_BREAK_PATTERN = re.compile(r"\n(?:[^\S\n]*\n)+|\u2029")
 REPEATED_PUNCT_PATTERN = re.compile(r"([!?,:;])\1{1,}")
 REPEATED_CHAR_PATTERN = re.compile(r"(.)\1{4,}", re.IGNORECASE)
 MENTION_PATTERN = re.compile(r"(?<!\S)@\w+")
@@ -37,14 +39,15 @@ FRACTION_PATTERN = re.compile(r"\b(\d+)\s*/\s*(\d+)\b")
 MULTIPLIER_PATTERN = re.compile(r"\b(\d+(?:[.,]\d+)?)x\b", re.IGNORECASE)
 CAPS_WORD_PATTERN = re.compile(r"\b[A-ZÁÉÍÓÚÀÂÊÔÃÕÇ]{4,}\b")
 SSML_BREAK_TIMES_BY_PUNCTUATION = {
-    ",": 180,
-    ";": 280,
-    ":": 260,
-    ".": 450,
-    "!": 520,
-    "?": 520,
-    ELLIPSIS_CHAR: 700,
+    ",": 200,
+    ";": 400,
+    ":": 400,
+    ".": 600,
+    "!": 600,
+    "?": 600,
+    ELLIPSIS_CHAR: 750,
 }
+SSML_PARAGRAPH_BREAK_MS = 1000
 SSML_SILENT_PUNCTUATION = set("()[]{}\"'`´“”‘’+-/$\\|_~^")
 SPEAKABLE_SYMBOLS = set("!?.,:;+-/%$()[]'\"") | {ELLIPSIS_CHAR}
 
@@ -681,16 +684,14 @@ def convert_plain_numbers(text: str) -> str:
 
 
 def apply_word_limit(text: str, max_words: int) -> tuple[str, bool]:
-    words = WORD_PATTERN.findall(text)
-
     if max_words <= 0:
         return "blablabla fala demais", True
 
+    words = list(WORD_PATTERN.finditer(text))
     if len(words) <= max_words:
         return text, False
 
-    kept = words[:max_words]
-    return " ".join(kept) + " blablabla fala demais", True
+    return text[:words[max_words - 1].end()] + " blablabla fala demais", True
 
 
 def looks_like_spam(text: str) -> bool:
@@ -802,11 +803,12 @@ def sanitize_chat_text(
         return "", False
 
     original_text = str(text)[:MAX_RAW_CHAT_LENGTH]
-    text = clean_chat_noise(original_text)
+    paragraphs = [clean_chat_noise(part) for part in PARAGRAPH_BREAK_PATTERN.split(original_text)]
     _debug_tts_preview("original", original_text)
-    _debug_tts_preview("limpo", text)
+    _debug_tts_preview("limpo", "\n\n".join(paragraphs))
 
-    text = normalize_for_speech(text)
+    normalized_paragraphs = map(normalize_for_speech, paragraphs)
+    text = "\n\n".join(filter(None, normalized_paragraphs))
     _debug_tts_preview("normalizado", text)
 
     if not text:
@@ -847,6 +849,8 @@ def build_polly_ssml(text: str) -> str:
     if not text:
         return ""
 
+    text = ELLIPSIS_PATTERN.sub(ELLIPSIS_CHAR, text)
+    text = PARAGRAPH_BREAK_PATTERN.sub(PARAGRAPH_SEPARATOR, text)
     parts: list[str] = []
     buffer: list[str] = []
     pending_break_ms = 0
@@ -858,11 +862,15 @@ def build_polly_ssml(text: str) -> str:
             parts.append(html.escape(segment, quote=False))
 
     for ch in text:
+        if ch == PARAGRAPH_SEPARATOR:
+            pending_break_ms = max(pending_break_ms, SSML_PARAGRAPH_BREAK_MS)
+            continue
+
         break_time = SSML_BREAK_TIMES_BY_PUNCTUATION.get(ch)
         if break_time is not None:
+            while buffer and buffer[-1].isspace():
+                buffer.pop()
             if buffer:
-                while buffer and buffer[-1].isspace():
-                    buffer.pop()
                 buffer.append(ch)
             pending_break_ms = max(pending_break_ms, break_time)
             continue
@@ -883,9 +891,6 @@ def build_polly_ssml(text: str) -> str:
         _append_ssml_break(parts, pending_break_ms)
 
     flush_buffer()
-
-    while parts and parts[-1].startswith("<break"):
-        parts.pop()
 
     if not parts:
         return ""

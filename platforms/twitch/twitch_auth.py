@@ -3,7 +3,6 @@ import threading
 import time
 import urllib.parse
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import requests
 
@@ -16,6 +15,7 @@ from config import (
     TWITCH_TOKEN_URL,
     TWITCH_VALIDATE_URL,
 )
+from platforms.oauth_callback import OAuthCallbackServer
 
 from .twitch_cache import TokenCache
 
@@ -27,87 +27,6 @@ TWITCH_AUTH_RECOVERABLE_ERRORS = (
     KeyError,
     requests.RequestException,
 )
-
-
-class OAuthCallbackServer:
-    def __init__(self, host: str, port: int):
-        self.host = host
-        self.port = port
-        self.auth_code: str | None = None
-        self.error: str | None = None
-        self.state: str | None = None
-        self._server: ThreadingHTTPServer | None = None
-        self._thread: threading.Thread | None = None
-
-    def start(self):
-        outer = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                parsed = urllib.parse.urlparse(self.path)
-
-                if parsed.path != "/callback":
-                    self.send_response(404)
-                    self.end_headers()
-                    self.wfile.write(b"Not found")
-                    return
-
-                params = urllib.parse.parse_qs(parsed.query)
-
-                outer.auth_code = params.get("code", [None])[0]
-                outer.error = params.get("error", [None])[0]
-                outer.state = params.get("state", [None])[0]
-
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.end_headers()
-
-                html = """
-                <html>
-                  <body style="font-family: Arial;">
-                    <h2>Autorizacao concluida.</h2>
-                    <p>Voce pode fechar esta aba.</p>
-                  </body>
-                </html>
-                """
-
-                self.wfile.write(html.encode("utf-8"))
-
-            def log_message(self, format, *args):
-                return
-
-        self._server = ThreadingHTTPServer((self.host, self.port), Handler)
-        self._thread = threading.Thread(
-            target=self._server.serve_forever,
-            daemon=True,
-        )
-        self._thread.start()
-
-    def stop(self):
-        if self._server:
-            try:
-                self._server.shutdown()
-            except (OSError, RuntimeError) as exc:
-                print(f"[TWITCH AUTH] falha ao parar callback OAuth: {exc}")
-
-            try:
-                self._server.server_close()
-            except OSError as exc:
-                print(f"[TWITCH AUTH] falha ao fechar callback OAuth: {exc}")
-
-    def wait_for_code(self, timeout=180, cancel_event: threading.Event | None = None):
-        start = time.time()
-
-        while time.time() - start < timeout:
-            if cancel_event is not None and cancel_event.is_set():
-                return None, "cancelled", None
-
-            if self.auth_code or self.error:
-                return self.auth_code, self.error, self.state
-
-            time.sleep(0.05)
-
-        return None, "timeout", None
 
 
 class TwitchAuth:
@@ -147,10 +66,11 @@ class TwitchAuth:
             TWITCH_TOKEN_URL,
             data=payload,
             timeout=(3, 5),
+            allow_redirects=False,
         )
 
         if r.status_code != 200:
-            raise RuntimeError(f"Falha ao trocar code por token. {r.text}")
+            raise RuntimeError(f"Falha ao trocar code por token da Twitch (HTTP {r.status_code}).")
 
         token_data = r.json()
         token_data["expires_at"] = int(time.time()) + int(
@@ -175,10 +95,11 @@ class TwitchAuth:
             TWITCH_TOKEN_URL,
             data=payload,
             timeout=(3, 5),
+            allow_redirects=False,
         )
 
         if r.status_code != 200:
-            raise RuntimeError(f"Falha ao renovar token. {r.text}")
+            raise RuntimeError(f"Falha ao renovar token da Twitch (HTTP {r.status_code}).")
 
         token_data = r.json()
         token_data["expires_at"] = int(time.time()) + int(
@@ -230,14 +151,9 @@ class TwitchAuth:
     # ==================================
 
     def run_browser_login(self, cancel_event: threading.Event | None = None):
-        parsed = urllib.parse.urlparse(TWITCH_REDIRECT_URI)
-
-        host = parsed.hostname or "localhost"
-        port = parsed.port or 80
-
         state = secrets.token_urlsafe(24)
 
-        callback = OAuthCallbackServer(host, port)
+        callback = OAuthCallbackServer(TWITCH_REDIRECT_URI, state)
         callback.start()
 
         try:
@@ -251,7 +167,7 @@ class TwitchAuth:
                 daemon=True,
             ).start()
 
-            code, error, returned_state = callback.wait_for_code(
+            code, error = callback.wait_for_code(
                 cancel_event=cancel_event
             )
 
@@ -265,10 +181,6 @@ class TwitchAuth:
                     "Nao foi possivel obter o codigo OAuth da Twitch."
                 )
 
-            if returned_state != state:
-                raise RuntimeError(
-                    "State OAuth invalido. Possivel resposta adulterada."
-                )
 
             token_data = self.exchange_code_for_token(code)
             self.cache.save(token_data)
@@ -278,7 +190,7 @@ class TwitchAuth:
                     enriched = self.enrich_with_validation(token_data)
                     self.cache.save_if_current(token_data["access_token"], enriched)
                 except TWITCH_AUTH_RECOVERABLE_ERRORS as e:
-                    print("[TWITCH AUTH] validacao posterior falhou:", e)
+                    print(f"[TWITCH AUTH] Validacao posterior falhou: {type(e).__name__}")
 
             threading.Thread(
                 target=validate_async,
@@ -338,11 +250,11 @@ class TwitchAuth:
                             self.cache.save(enriched)
                             return enriched
                         except TWITCH_AUTH_RECOVERABLE_ERRORS as exc:
-                            print(f"[TWITCH AUTH] Falha ao enriquecer token renovado: {exc}")
+                            print(f"[TWITCH AUTH] Falha ao validar token renovado: {type(exc).__name__}")
 
                     return refreshed
 
                 except TWITCH_AUTH_RECOVERABLE_ERRORS as exc:
-                    print(f"[TWITCH AUTH] Falha ao renovar token salvo: {exc}")
+                    print(f"[TWITCH AUTH] Falha ao renovar token salvo: {type(exc).__name__}")
 
         return self.run_browser_login(cancel_event=cancel_event)

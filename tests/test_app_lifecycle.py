@@ -1,3 +1,5 @@
+import contextlib
+import io
 import queue
 import threading
 import unittest
@@ -8,6 +10,27 @@ from launcher_gui import LauncherGUI
 
 
 class AppLifecycleTests(unittest.TestCase):
+    def test_critical_exception_omits_exception_payload_from_logs_and_dialog(self):
+        output = io.StringIO()
+        private_detail = "private-diagnostic-payload"
+        with contextlib.redirect_stdout(output), patch("app.show_critical_error") as dialog:
+            try:
+                raise ValueError(private_detail)
+            except ValueError as error:
+                app.report_critical_exception(error)
+
+        self.assertIn("[APP] erro fatal: ValueError", output.getvalue())
+        self.assertNotIn(private_detail, output.getvalue())
+        self.assertNotIn(private_detail, dialog.call_args.args[0])
+
+    def test_critical_dialog_failure_does_not_log_dialog_text(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), patch("app.tk.Tk", side_effect=app.tk.TclError):
+            app.show_critical_error("private-dialog-text")
+
+        self.assertIn("exibir o aviso critico", output.getvalue())
+        self.assertNotIn("private-dialog-text", output.getvalue())
+
     def test_worker_error_is_shown_only_when_main_thread_drains_queue(self):
         errors = queue.Queue(maxsize=20)
         root = Mock()

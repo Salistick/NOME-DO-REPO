@@ -5,12 +5,9 @@ import threading
 import time
 import urllib.parse
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import requests
-
-from secure_storage import migration_backup_path, secure_read_json, secure_write_json
 
 from config import (
     KICK_CLIENT_ID,
@@ -18,6 +15,8 @@ from config import (
     KICK_REDIRECT_URI,
     KICK_SCOPES,
 )
+from platforms.oauth_callback import OAuthCallbackServer
+from secure_storage import migration_backup_path, secure_read_json, secure_write_json
 
 KICK_AUTH_URL = "https://id.kick.com/oauth/authorize"
 KICK_TOKEN_URL = "https://id.kick.com/oauth/token"
@@ -30,82 +29,6 @@ KICK_AUTH_RECOVERABLE_ERRORS = (
     KeyError,
     requests.RequestException,
 )
-
-
-class OAuthCallbackServer:
-    def __init__(self, redirect_uri: str):
-        parsed = urllib.parse.urlparse(redirect_uri)
-        self.host = parsed.hostname or "localhost"
-        self.port = parsed.port or 80
-        self.path = parsed.path or "/callback"
-        self.auth_code: str | None = None
-        self.error: str | None = None
-        self.state: str | None = None
-        self._server: ThreadingHTTPServer | None = None
-        self._thread: threading.Thread | None = None
-
-    def start(self):
-        outer = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                parsed = urllib.parse.urlparse(self.path)
-
-                if parsed.path != outer.path:
-                    self.send_response(404)
-                    self.end_headers()
-                    self.wfile.write(b"Not found")
-                    return
-
-                params = urllib.parse.parse_qs(parsed.query)
-
-                outer.auth_code = params.get("code", [None])[0]
-                outer.error = params.get("error", [None])[0]
-                outer.state = params.get("state", [None])[0]
-
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(
-                    b"<html><body style='font-family: Arial;'>"
-                    b"<h2>Autorizacao da Kick concluida.</h2>"
-                    b"<p>Voce pode fechar esta aba e voltar ao bot.</p>"
-                    b"</body></html>"
-                )
-
-            def log_message(self, format, *args):
-                return
-
-        self._server = ThreadingHTTPServer((self.host, self.port), Handler)
-        self._thread = threading.Thread(
-            target=self._server.serve_forever,
-            daemon=True,
-            name="KickOAuthCallbackThread",
-        )
-        self._thread.start()
-
-    def stop(self):
-        if self._server:
-            try:
-                self._server.shutdown()
-            except (OSError, RuntimeError) as exc:
-                print(f"[KICK AUTH] falha ao parar callback OAuth: {exc}")
-            try:
-                self._server.server_close()
-            except OSError as exc:
-                print(f"[KICK AUTH] falha ao fechar callback OAuth: {exc}")
-
-    def wait_for_code(self, timeout=180, cancel_event: threading.Event | None = None):
-        started = time.time()
-
-        while time.time() - started < timeout:
-            if cancel_event is not None and cancel_event.is_set():
-                return None, "cancelled", None
-            if self.auth_code or self.error:
-                return self.auth_code, self.error, self.state
-            time.sleep(0.05)
-
-        return None, "timeout", None
 
 
 class KickAuth:
@@ -149,7 +72,7 @@ class KickAuth:
         code_challenge = self._build_code_challenge(code_verifier)
         state = secrets.token_urlsafe(24)
 
-        callback = OAuthCallbackServer(KICK_REDIRECT_URI)
+        callback = OAuthCallbackServer(KICK_REDIRECT_URI, state)
         callback.start()
 
         try:
@@ -166,7 +89,7 @@ class KickAuth:
                 name="KickOAuthBrowserThread",
             ).start()
 
-            code, error, returned_state = callback.wait_for_code(cancel_event=cancel_event)
+            code, error = callback.wait_for_code(cancel_event=cancel_event)
 
             if error:
                 if error == "cancelled":
@@ -176,8 +99,6 @@ class KickAuth:
             if not code:
                 raise RuntimeError("Nao foi possivel obter o codigo OAuth da Kick.")
 
-            if returned_state != state:
-                raise RuntimeError("State OAuth invalido na Kick.")
 
             token_data = self.exchange_code_for_token(code, code_verifier)
             token_data = self._attach_profile(token_data)
@@ -240,7 +161,7 @@ class KickAuth:
                 self.save_token_cache(merged)
                 return merged
             except KICK_AUTH_RECOVERABLE_ERRORS as exc:
-                print(f"[KICK AUTH] Falha ao renovar token salvo: {exc}")
+                print(f"[KICK AUTH] Falha ao renovar token salvo: {type(exc).__name__}")
 
         return self.run_browser_login(cancel_event=cancel_event)
 
@@ -264,7 +185,7 @@ class KickAuth:
             self.save_token_cache(merged)
             return merged
         except KICK_AUTH_RECOVERABLE_ERRORS as exc:
-            print(f"[KICK AUTH] Falha ao renovar token salvo: {exc}")
+            print(f"[KICK AUTH] Falha ao renovar token salvo: {type(exc).__name__}")
             return {}
 
     def _token_request(self, payload: dict) -> dict:
@@ -273,11 +194,12 @@ class KickAuth:
             data=payload,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=(5, 15),
+            allow_redirects=False,
         )
 
         if response.status_code != 200:
             raise RuntimeError(
-                f"Falha no token OAuth da Kick. Status={response.status_code} Body={response.text[:300]}"
+                f"Falha no token OAuth da Kick (HTTP {response.status_code})."
             )
 
         data = response.json()

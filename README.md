@@ -37,7 +37,7 @@ if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 .\.venv\Scripts\python.exe app.py
 ```
 
-Preencha o `.env` apenas para as plataformas que usarão login. O callback cadastrado no aplicativo de cada plataforma deve ser idêntico ao respectivo `*_REDIRECT_URI`. A leitura pública por canal está disponível sem OAuth; respostas no chat dependem de autenticação/configuração do remetente.
+Preencha o `.env` apenas para as plataformas que usarão login. O callback cadastrado no aplicativo de cada plataforma deve ser idêntico ao respectivo `*_REDIRECT_URI`. Use uma URL `http://` local com hostname `localhost`, `127.0.0.1` ou `[::1]`. A leitura pública por canal está disponível sem OAuth; respostas no chat dependem de autenticação/configuração do remetente.
 
 Na primeira execução, configure o Amazon Polly pelo assistente. Ele oferece chave de acesso e AWS SSO; perfis AWS locais existentes também são suportados pelo armazenamento. O Polly é um serviço pago: o custo depende do uso e da conta AWS. Login, listagens e validação AWS rodam em segundo plano; cancelar impede que uma operação atrasada salve credenciais.
 

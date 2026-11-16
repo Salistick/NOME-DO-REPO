@@ -14,7 +14,7 @@ class KickChatSender:
         try:
             return self._send_message(text)
         except (RuntimeError, OSError, ValueError, TypeError, requests.RequestException) as exc:
-            print(f"[KICK SENDER] Falha ao enviar mensagem: {exc}")
+            print(f"[KICK SENDER] Falha ao enviar mensagem: {type(exc).__name__}")
             return False
 
     def _send_message(self, text: str) -> bool:
@@ -58,13 +58,11 @@ class KickChatSender:
                 "broadcaster_user_id": int(broadcaster_user_id),
             },
             timeout=(5, 15),
+            allow_redirects=False,
         )
 
         if response.status_code not in {200, 201, 202, 204}:
-            print(
-                f"[KICK SENDER] Falha ao enviar mensagem. "
-                f"Status={response.status_code} Body={response.text[:300]}"
-            )
+            print(f"[KICK SENDER] Falha ao enviar mensagem (HTTP {response.status_code}).")
             return False
 
         return True

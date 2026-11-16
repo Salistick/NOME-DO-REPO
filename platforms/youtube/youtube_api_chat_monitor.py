@@ -131,7 +131,7 @@ class YouTubeApiChatMonitor:
 
         try:
             if response.status_code != 200:
-                raise RuntimeError(f"YouTube liveChatMessages.list retornou status {response.status_code}: {response.text[:300]}")
+                raise RuntimeError(f"YouTube liveChatMessages.list retornou HTTP {response.status_code}.")
 
             payload = response.json()
             if not isinstance(payload, dict):

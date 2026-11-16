@@ -362,10 +362,7 @@ class YouTubeLiveResolver:
             return None
 
         if response.status_code != 200:
-            print(
-                f"[YOUTUBE RESOLVER] API do YouTube retornou status {response.status_code}: "
-                f"{response.text}"
-            )
+            print(f"[YOUTUBE RESOLVER] API do YouTube retornou HTTP {response.status_code}.")
             return None
 
         data = response.json()
@@ -415,10 +412,7 @@ class YouTubeLiveResolver:
             return live_data
 
         if response.status_code != 200:
-            print(
-                f"[YOUTUBE RESOLVER] API videos.list retornou status {response.status_code}: "
-                f"{response.text[:300]}"
-            )
+            print(f"[YOUTUBE RESOLVER] API videos.list retornou HTTP {response.status_code}.")
             return live_data
 
         data = response.json()

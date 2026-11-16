@@ -184,10 +184,11 @@ class TwitchChatSender:
                 "refresh_token": refresh_token,
             },
             timeout=(3, 5),
+            allow_redirects=False,
         )
 
         if response.status_code != 200:
-            raise RuntimeError(f"Falha ao renovar token da conta bot. {response.text}")
+            raise RuntimeError(f"Falha ao renovar token da conta bot (HTTP {response.status_code}).")
 
         token_data = response.json()
         token_data["expires_at"] = int(time.time()) + int(token_data.get("expires_in", 0) or 0)

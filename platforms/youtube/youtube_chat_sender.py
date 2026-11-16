@@ -40,13 +40,11 @@ class YouTubeChatSender:
                 }
             },
             timeout=(5, 15),
+            allow_redirects=False,
         )
 
         if response.status_code not in {200, 201}:
-            print(
-                f"[YOUTUBE SENDER] Falha ao enviar mensagem. "
-                f"Status={response.status_code} Body={response.text[:300]}"
-            )
+            print(f"[YOUTUBE SENDER] Falha ao enviar mensagem (HTTP {response.status_code}).")
             return False
 
         return True

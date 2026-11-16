@@ -345,8 +345,11 @@ def try_start_auto_update(notify: Callable[[str], None] | None = None) -> bool:
             LATEST_RELEASE_API_URL,
             timeout=(3, 10),
             headers={"Accept": "application/vnd.github+json", "User-Agent": "TTSLiveUpdater"},
+            allow_redirects=False,
         ) as response:
             response.raise_for_status()
+            if response.status_code != 200:
+                return False
             latest_release = response.json()
     except (OSError, requests.RequestException, TypeError, ValueError) as exc:
         print(f"[UPDATER] Falha ao consultar release mais recente: {exc}")

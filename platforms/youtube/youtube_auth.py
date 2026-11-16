@@ -3,18 +3,17 @@ import threading
 import time
 import urllib.parse
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import requests
-
-from secure_storage import migration_backup_path, secure_read_json, secure_write_json
 
 from config import (
     YOUTUBE_CLIENT_ID,
     YOUTUBE_CLIENT_SECRET,
     YOUTUBE_REDIRECT_URI,
 )
+from platforms.oauth_callback import OAuthCallbackServer
+from secure_storage import migration_backup_path, secure_read_json, secure_write_json
 
 from .youtube_config_store import YouTubeConfigStore
 
@@ -38,87 +37,6 @@ YOUTUBE_AUTH_RECOVERABLE_ERRORS = (
     KeyError,
     requests.RequestException,
 )
-
-
-class OAuthCallbackServer:
-    def __init__(self, host: str, port: int):
-        self.host = host
-        self.port = port
-        self.auth_code: str | None = None
-        self.error: str | None = None
-        self.state: str | None = None
-        self._server: ThreadingHTTPServer | None = None
-        self._thread: threading.Thread | None = None
-
-    def start(self):
-        outer = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                parsed = urllib.parse.urlparse(self.path)
-
-                if parsed.path != "/callback":
-                    self.send_response(404)
-                    self.end_headers()
-                    self.wfile.write(b"Not found")
-                    return
-
-                params = urllib.parse.parse_qs(parsed.query)
-
-                outer.auth_code = params.get("code", [None])[0]
-                outer.error = params.get("error", [None])[0]
-                outer.state = params.get("state", [None])[0]
-
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.end_headers()
-
-                html = """
-                <html>
-                  <body style="font-family: Arial;">
-                    <h2>Autorizacao do YouTube concluida.</h2>
-                    <p>Voce pode fechar esta aba e voltar ao bot.</p>
-                  </body>
-                </html>
-                """
-
-                self.wfile.write(html.encode("utf-8"))
-
-            def log_message(self, format, *args):
-                return
-
-        self._server = ThreadingHTTPServer((self.host, self.port), Handler)
-        self._thread = threading.Thread(
-            target=self._server.serve_forever,
-            daemon=True,
-        )
-        self._thread.start()
-
-    def stop(self):
-        if self._server:
-            try:
-                self._server.shutdown()
-            except (OSError, RuntimeError) as exc:
-                print(f"[YOUTUBE AUTH] falha ao parar callback OAuth: {exc}")
-
-            try:
-                self._server.server_close()
-            except OSError as exc:
-                print(f"[YOUTUBE AUTH] falha ao fechar callback OAuth: {exc}")
-
-    def wait_for_code(self, timeout=180, cancel_event: threading.Event | None = None):
-        started = time.time()
-
-        while time.time() - started < timeout:
-            if cancel_event is not None and cancel_event.is_set():
-                return None, "cancelled", None
-
-            if self.auth_code or self.error:
-                return self.auth_code, self.error, self.state
-
-            time.sleep(0.05)
-
-        return None, "timeout", None
 
 
 class YouTubeAuth:
@@ -248,12 +166,13 @@ class YouTubeAuth:
             GOOGLE_TOKEN_URL,
             data=payload,
             timeout=(3, 5),
+            allow_redirects=False,
         )
 
         if response.status_code != 200:
             raise RuntimeError(
                 f"Falha ao trocar code por token do YouTube. "
-                f"Status={response.status_code} Body={response.text}"
+                f"HTTP {response.status_code}."
             )
 
         token_data = response.json()
@@ -272,12 +191,13 @@ class YouTubeAuth:
             GOOGLE_TOKEN_URL,
             data=payload,
             timeout=(3, 5),
+            allow_redirects=False,
         )
 
         if response.status_code != 200:
             raise RuntimeError(
                 f"Falha ao renovar token do YouTube. "
-                f"Status={response.status_code} Body={response.text}"
+                f"HTTP {response.status_code}."
             )
 
         token_data = response.json()
@@ -298,7 +218,7 @@ class YouTubeAuth:
         if response.status_code != 200:
             raise RuntimeError(
                 f"Falha ao buscar userinfo Google. "
-                f"Status={response.status_code} Body={response.text}"
+                f"HTTP {response.status_code}."
             )
 
         return response.json()
@@ -317,7 +237,7 @@ class YouTubeAuth:
         if response.status_code != 200:
             raise RuntimeError(
                 f"Falha ao listar canais do YouTube. "
-                f"Status={response.status_code} Body={response.text}"
+                f"HTTP {response.status_code}."
             )
 
         data = response.json()
@@ -343,14 +263,9 @@ class YouTubeAuth:
     # ==================================
 
     def run_browser_login(self, cancel_event: threading.Event | None = None) -> dict:
-        parsed = urllib.parse.urlparse(YOUTUBE_REDIRECT_URI)
-
-        host = parsed.hostname or "localhost"
-        port = parsed.port or 80
-
         state = secrets.token_urlsafe(24)
 
-        callback = OAuthCallbackServer(host, port)
+        callback = OAuthCallbackServer(YOUTUBE_REDIRECT_URI, state)
         callback.start()
 
         try:
@@ -364,7 +279,7 @@ class YouTubeAuth:
                 daemon=True,
             ).start()
 
-            code, error, returned_state = callback.wait_for_code(
+            code, error = callback.wait_for_code(
                 cancel_event=cancel_event
             )
 
@@ -376,8 +291,6 @@ class YouTubeAuth:
             if not code:
                 raise RuntimeError("Nao foi possivel obter o codigo OAuth do YouTube.")
 
-            if returned_state != state:
-                raise RuntimeError("State OAuth invalido no YouTube.")
 
             token_data = self.exchange_code_for_token(code)
 
@@ -458,7 +371,7 @@ class YouTubeAuth:
                 return account
 
             except YOUTUBE_AUTH_RECOVERABLE_ERRORS as exc:
-                print(f"[YOUTUBE AUTH] Falha ao renovar token salvo: {exc}")
+                print(f"[YOUTUBE AUTH] Falha ao renovar token salvo: {type(exc).__name__}")
 
         return self.run_browser_login(cancel_event=cancel_event)
 

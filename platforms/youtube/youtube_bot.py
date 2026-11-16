@@ -247,10 +247,8 @@ class YouTubeBot:
                 print(f"[YOUTUBE BOT] live{display_index} nao encontrada na configuracao.")
                 return False
 
-            account_id = (account.get("account_id") or "").strip()
             print(
                 f"[YOUTUBE BOT] Comando !live{display_index}: "
-                f"account_id={account_id or 'sem account_id'} | "
                 f"canal={channel.get('title', '')} | running={self._running}"
             )
 
@@ -569,7 +567,7 @@ class YouTubeBot:
             )
         else:
             print(
-                f"[YOUTUBE BOT] Modo autenticado | Conta: {(self._active_account or {}).get('email', '')} | "
+                "[YOUTUBE BOT] Modo autenticado | "
                 f"Canal: {self._active_channel.get('title', '')}"
             )
         print(
@@ -629,7 +627,7 @@ class YouTubeBot:
             else:
                 account = self.auth.get_valid_account_by_index(self._active_account_index)
         except YOUTUBE_BOT_RECOVERABLE_ERRORS as exc:
-            print(f"[YOUTUBE BOT] Nao foi possivel renovar token da conta ativa: {exc}")
+            print(f"[YOUTUBE BOT] Nao foi possivel renovar token da conta ativa: {type(exc).__name__}")
             return (self._active_account.get("access_token") or "").strip()
 
         self._active_account = account

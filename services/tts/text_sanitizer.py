@@ -76,7 +76,7 @@ INTENT_EMOJI_REPLACEMENTS = {
 }
 VARIATION_SELECTOR = "\ufe0f"
 
-NON_SPEAKABLE_PATTERN = re.compile(r"[^\w\s!?.,:;\u2026+\-/%$()'\"\[\]A-Za-z0-9\u00C0-\u00FF]")
+NON_SPEAKABLE_PATTERN = re.compile(r"[^\w\s!?.,:;\u2026+\-/%$()'\"\[\]]")
 
 COMMON_REPLACEMENTS = {
     "vc": "voce",

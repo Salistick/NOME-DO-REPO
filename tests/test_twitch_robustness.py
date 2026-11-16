@@ -1,3 +1,4 @@
+import ssl
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,7 @@ class TwitchIRCRegressionTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 client.connect()
         raw_sock.close.assert_called_once()
+        self.assertEqual(context.minimum_version, ssl.TLSVersion.TLSv1_2)
 
     def test_multibyte_character_split_across_tcp_packets_is_preserved(self):
         client = TwitchIRCClient("token", "bot", "channel")

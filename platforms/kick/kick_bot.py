@@ -176,7 +176,7 @@ class KickBot:
                 self._status = self.pusher_client.get_status() or "conectando WebSocket Kick"
 
             suffix = " sem login" if self._public_mode else ""
-            print(f"[KICK BOT] monitorando @{channel_slug}{suffix}")
+            print(f"[KICK BOT] monitorando canal Kick{suffix}.")
         except KICK_BOT_RECOVERABLE_ERRORS as exc:
             self._status = "erro WebSocket Kick"
             print(f"[KICK BOT] Falha no WebSocket Kick: {exc}")
@@ -225,7 +225,7 @@ class KickBot:
             print("[KICK BOT] Sessao Kick autenticada para envio de mensagens.")
             return True
         except KICK_BOT_RECOVERABLE_ERRORS as exc:
-            print(f"[KICK BOT] Nao foi possivel autenticar envio Kick: {exc}")
+            print(f"[KICK BOT] Nao foi possivel autenticar envio Kick: {type(exc).__name__}")
             return False
 
     def _get_valid_auth_token(self) -> dict:
@@ -239,7 +239,7 @@ class KickBot:
             try:
                 self._token_data = self.auth.get_valid_cached_token()
             except KICK_BOT_RECOVERABLE_ERRORS as exc:
-                print(f"[KICK BOT] Token Kick indisponivel para envio: {exc}")
+                print(f"[KICK BOT] Token Kick indisponivel para envio: {type(exc).__name__}")
                 self._sender_authenticated = False
                 return {}
 

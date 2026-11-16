@@ -21,6 +21,7 @@ class AutoUpdaterTests(unittest.TestCase):
         self.digest = "sha256:" + hashlib.sha256(self.CONTENT).hexdigest()
         self.response = MagicMock()
         self.response.__enter__.return_value = self.response
+        self.response.status_code = 200
         self.response.iter_content.return_value = [self.CONTENT[:5], b"", self.CONTENT[5:]]
 
     def download(self, **kwargs):
@@ -80,6 +81,16 @@ class AutoUpdaterTests(unittest.TestCase):
                 patch("auto_updater.cleanup_old_update_downloads"), \
                 patch("auto_updater.requests.get", return_value=self.response):
             self.assertFalse(updater.try_start_auto_update())
+
+    def test_redirect_cannot_supply_release_metadata(self):
+        self.response.status_code = 302
+        with patch("auto_updater._is_supported_runtime", return_value=True), \
+                patch("auto_updater.CURRENT_APP_VERSION", "v1.0"), \
+                patch("auto_updater.cleanup_old_update_downloads"), \
+                patch("auto_updater.requests.get", return_value=self.response) as get:
+            self.assertFalse(updater.try_start_auto_update())
+        self.assertFalse(get.call_args.kwargs["allow_redirects"])
+        self.response.json.assert_not_called()
 
     def test_batch_paths_reject_expansion(self):
         with self.assertRaises(ValueError):

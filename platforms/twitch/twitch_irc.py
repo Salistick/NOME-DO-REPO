@@ -69,8 +69,9 @@ class TwitchIRCClient:
         self._running = False
 
     def connect(self) -> None:
-        raw_sock = socket.create_connection((self.host, self.port), timeout=30)
         context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        raw_sock = socket.create_connection((self.host, self.port), timeout=30)
         try:
             self.sock = context.wrap_socket(raw_sock, server_hostname=self.host)
         except OSError:

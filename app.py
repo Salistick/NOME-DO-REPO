@@ -7,6 +7,7 @@ import tkinter as tk
 import traceback
 from pathlib import Path
 from tkinter import messagebox
+from types import TracebackType
 
 from single_instance import AlreadyRunningError, SingleInstanceLock
 
@@ -165,7 +166,7 @@ def show_critical_error(message: str):
         try:
             _pending_critical_errors.put_nowait(message)
         except queue.Full:
-            print("[APP] fila de avisos cheia:", message)
+            print("[APP] fila de avisos criticos cheia.")
         return
     try:
         root = tk.Tk()
@@ -173,7 +174,7 @@ def show_critical_error(message: str):
         messagebox.showerror("TTS Live - Erro critico", message)
         root.destroy()
     except tk.TclError:
-        print(message)
+        print("[APP] nao foi possivel exibir o aviso critico.")
 
 
 def _show_pending_critical_errors(root):
@@ -188,14 +189,17 @@ def _show_pending_critical_errors(root):
 
 
 def format_critical_error_message(exc: BaseException) -> str:
-    details = str(exc).strip() or exc.__class__.__name__
-    return f"{details}\n\n{build_env_help_message()}"
+    return f"Falha na execucao ({type(exc).__name__}).\n\n{build_env_help_message()}"
+
+
+def _log_critical_exception(context: str, error_type: type[BaseException], frames: TracebackType | None):
+    print(f"[APP] {context}: {error_type.__name__}")
+    if frames is not None:
+        print("".join(traceback.format_tb(frames)).rstrip())
 
 
 def report_critical_exception(exc: BaseException, include_traceback: bool = True) -> None:
-    print("[APP] erro fatal:", exc)
-    if include_traceback:
-        print(traceback.format_exc())
+    _log_critical_exception("erro fatal", type(exc), exc.__traceback__ if include_traceback else None)
     show_critical_error(format_critical_error_message(exc))
 
 
@@ -204,13 +208,11 @@ def install_exception_hooks() -> None:
         if issubclass(exc_type, KeyboardInterrupt):
             return
 
-        print("[APP] excecao nao tratada:")
-        print("".join(traceback.format_exception(exc_type, exc_value, exc_traceback)))
+        _log_critical_exception("excecao nao tratada", exc_type, exc_traceback)
         show_critical_error(format_critical_error_message(exc_value))
 
     def handle_thread_exception(args):
-        print(f"[APP] excecao critica na thread {args.thread.name}:")
-        print("".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
+        _log_critical_exception("excecao critica em segundo plano", args.exc_type, args.exc_traceback)
         show_critical_error(format_critical_error_message(args.exc_value))
 
     sys.excepthook = handle_exception
@@ -335,7 +337,9 @@ def _run_app():
                     parent=gui.root,
                 )
             except APP_RECOVERABLE_ERRORS as exc:
-                show_critical_error(f"Amazon Polly foi salvo, mas nao foi possivel recarregar:\n\n{exc}")
+                show_critical_error(
+                    f"Amazon Polly foi salvo, mas nao foi possivel recarregar ({type(exc).__name__})."
+                )
 
         def clear_platform_channel(platform_key: str):
             new_state = get_app_state()
@@ -410,9 +414,12 @@ def _run_app():
                 if not is_current_twitch_attempt(attempt_id, cancel_event):
                     twitch_bot._status = "desconectado"
                 else:
-                    print("[APP] erro conectando twitch:", e)
+                    print(f"[APP] erro conectando Twitch: {type(e).__name__}")
                     twitch_bot._status = "erro"
-                    show_critical_error(f"Falha critica ao conectar Twitch:\n\n{e}")
+                    show_critical_error(
+                        f"Falha ao conectar Twitch ({type(e).__name__}). "
+                        "Confira o .env e o callback OAuth cadastrado."
+                    )
 
             finally:
                 with twitch_connecting_lock:
@@ -477,9 +484,12 @@ def _run_app():
                 if not is_current_youtube_attempt(attempt_id, cancel_event):
                     youtube_bot.refresh_idle_status()
                 else:
-                    print("[APP] erro conectando youtube:", e)
+                    print(f"[APP] erro conectando YouTube: {type(e).__name__}")
                     youtube_bot._status = "erro"
-                    show_critical_error(f"Falha critica ao conectar YouTube:\n\n{e}")
+                    show_critical_error(
+                        f"Falha ao conectar YouTube ({type(e).__name__}). "
+                        "Confira o .env e o callback OAuth cadastrado."
+                    )
 
             finally:
                 with youtube_connecting_lock:

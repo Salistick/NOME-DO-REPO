@@ -344,8 +344,7 @@ class TwitchBot:
 
         channel = TWITCH_CHANNEL or login
 
-        print(f"[TWITCH BOT] Conta autenticada: {login}")
-        print(f"[TWITCH BOT] Canal monitorado: {channel}")
+        print("[TWITCH BOT] Conectando com conta autenticada.")
 
         self.client = TwitchIRCClient(
             oauth_token=access_token,
@@ -360,7 +359,7 @@ class TwitchBot:
 
         self._status = f"monitorando #{channel}"
 
-        print(f"Conectado ao chat da Twitch. Monitorando #{channel}...")
+        print("[TWITCH BOT] Conectado ao chat da Twitch em modo autenticado.")
         self._announce_chat_connection(channel)
 
         self.client.listen_forever(self._on_message)
@@ -410,7 +409,7 @@ class TwitchBot:
 
         with self._announce_lock:
             if channel_key in self._announced_connection_channels:
-                print(f"[TWITCH BOT] Mensagem de conexao ja enviada nesta sessao em #{channel_key}.")
+                print("[TWITCH BOT] Mensagem de conexao ja enviada nesta sessao.")
                 return
             if channel_key in self._announcing_connection_channels:
                 return
@@ -426,7 +425,7 @@ class TwitchBot:
                     if self.send_chat_message(message):
                         with self._announce_lock:
                             self._announced_connection_channels.add(channel_key)
-                        print(f"[TWITCH BOT] Mensagem de conexao enviada em #{channel_key}.")
+                        print("[TWITCH BOT] Mensagem de conexao enviada.")
                         return
                     print(f"[TWITCH BOT] Falha ao enviar mensagem de conexao (tentativa {attempt + 1}/2).")
                 except TWITCH_BOT_RECOVERABLE_ERRORS as exc:

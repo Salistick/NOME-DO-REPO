@@ -1,5 +1,14 @@
 # Histórico de mudanças
 
+## v1.2.2 — 2026-11-16
+
+- O OAuth da Twitch, do YouTube e da Kick aceita o retorno apenas pela interface local, valida o `state` e rejeita redirecionamentos nas requisições de token. Use um callback HTTP com `localhost`, `127.0.0.1` ou `[::1]` e o caminho registrado na plataforma.
+- Os logs deixam de incluir o e-mail e o ID da conta do YouTube e o conteúdo das respostas de erro nas rotas de autenticação. O IRC da Twitch exige TLS 1.2 ou superior.
+- O atualizador consulta os metadados diretamente no endpoint de releases do GitHub. Variantes locais de `.env` são ignoradas pelo Git.
+- As Actions são fixadas por SHA e a permissão de escrita fica restrita ao job de publicação. Foram atualizados boto3, botocore, pip, Ruff, checkout, setup-python e upload-artifact.
+
+[Comparação completa com v1.2.1](https://github.com/Salistick/NOME-DO-REPO/compare/v1.2.1...v1.2.2).
+
 ## v1.2.1 — 2026-11-06
 
 - Os comandos `!ms` e `!mm` usam novas pausas de locução para vírgula (200 ms), ponto e vírgula e dois-pontos (400 ms), ponto final, interrogação e exclamação (600 ms) e reticências `…` ou `...` (750 ms).

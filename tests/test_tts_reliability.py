@@ -376,16 +376,16 @@ class TTSConfigurationTests(unittest.TestCase):
 
         self.assertEqual(
             [pause.get("time") for pause in ssml.findall("break")],
-            ["200ms", "400ms", "400ms", "600ms", "600ms", "600ms", "750ms", "750ms"],
+            ["10ms", "20ms", "20ms", "30ms", "30ms", "30ms", "40ms", "40ms"],
         )
 
-    def test_ssml_keeps_the_pause_after_final_sentence_punctuation(self):
-        for mark in (".", "?", "!"):
-            with self.subTest(mark=mark):
-                ssml = ElementTree.fromstring(build_polly_ssml(f"Pronto{mark}"))
+    def test_ssml_keeps_final_punctuation_without_an_explicit_pause(self):
+        for suffix, punctuation in ((".", "."), ('?"', "?"), ("!)", "!"), ("...", "…")):
+            with self.subTest(suffix=suffix):
+                ssml = ElementTree.fromstring(build_polly_ssml(f"Pronto{suffix}"))
 
-                self.assertEqual(ssml.text.strip(), f"Pronto{mark}")
-                self.assertEqual([pause.get("time") for pause in ssml.findall("break")], ["600ms"])
+                self.assertEqual(ssml.text, f"Pronto{punctuation}")
+                self.assertEqual(ssml.findall("break"), [])
 
     def test_paragraph_pause_survives_chat_sanitizing_and_word_limit(self):
         for newline in ("\n", "\r\n"):
@@ -396,7 +396,7 @@ class TTSConfigurationTests(unittest.TestCase):
 
                 self.assertTrue(truncated)
                 pauses = ssml.findall("break")
-                self.assertEqual([pause.get("time") for pause in pauses], ["1000ms"])
+                self.assertEqual([pause.get("time") for pause in pauses], ["60ms"])
                 self.assertEqual(pauses[0].tail.strip(), "Segunda linha blablabla fala demais")
 
     def test_custom_pronunciation_is_literal_text(self):

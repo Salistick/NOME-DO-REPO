@@ -39,15 +39,15 @@ FRACTION_PATTERN = re.compile(r"\b(\d+)\s*/\s*(\d+)\b")
 MULTIPLIER_PATTERN = re.compile(r"\b(\d+(?:[.,]\d+)?)x\b", re.IGNORECASE)
 CAPS_WORD_PATTERN = re.compile(r"\b[A-ZÁÉÍÓÚÀÂÊÔÃÕÇ]{4,}\b")
 SSML_BREAK_TIMES_BY_PUNCTUATION = {
-    ",": 200,
-    ";": 400,
-    ":": 400,
-    ".": 600,
-    "!": 600,
-    "?": 600,
-    ELLIPSIS_CHAR: 750,
+    ",": 10,
+    ";": 20,
+    ":": 20,
+    ".": 30,
+    "!": 30,
+    "?": 30,
+    ELLIPSIS_CHAR: 40,
 }
-SSML_PARAGRAPH_BREAK_MS = 1000
+SSML_PARAGRAPH_BREAK_MS = 60
 SSML_SILENT_PUNCTUATION = set("()[]{}\"'`´“”‘’+-/$\\|_~^")
 SPEAKABLE_SYMBOLS = set("!?.,:;+-/%$()[]'\"") | {ELLIPSIS_CHAR}
 
@@ -886,11 +886,9 @@ def build_polly_ssml(text: str) -> str:
 
         buffer.append(ch)
 
-    if pending_break_ms:
-        flush_buffer()
-        _append_ssml_break(parts, pending_break_ms)
-
     flush_buffer()
+    if parts and parts[-1].startswith("<break"):
+        parts.pop()
 
     if not parts:
         return ""

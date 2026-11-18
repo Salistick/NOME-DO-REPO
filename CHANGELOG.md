@@ -1,5 +1,12 @@
 # Histórico de mudanças
 
+## v1.2.3 — 2026-11-17
+
+- Os comandos `!ms` e `!mm` usam pausas de 10 ms na vírgula, 20 ms no ponto e vírgula e nos dois-pontos, 30 ms entre frases, 40 ms nas reticências e 60 ms entre parágrafos.
+- O último sinal de pontuação mantém a entonação da voz sem acrescentar uma pausa programada ao fim da mensagem.
+
+[Comparação completa com v1.2.2](https://github.com/Salistick/NOME-DO-REPO/compare/v1.2.2...v1.2.3).
+
 ## v1.2.2 — 2026-11-16
 
 - O OAuth da Twitch, do YouTube e da Kick aceita o retorno apenas pela interface local, valida o `state` e rejeita redirecionamentos nas requisições de token. Use um callback HTTP com `localhost`, `127.0.0.1` ou `[::1]` e o caminho registrado na plataforma.

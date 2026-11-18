@@ -30,6 +30,7 @@ class _AudioTask:
     path: Path
     generation: int
     bypass_state: bool = False
+    skipped: bool = False
 
 
 class AudioPlayer:
@@ -57,6 +58,8 @@ class AudioPlayer:
         self._closed = False
         self._queue_lock = threading.Lock()
         self._mixer_lock = threading.RLock()
+        self._current_lock = threading.Lock()
+        self._current_task: _AudioTask | None = None
         self._output_devices = self.list_output_devices()
 
         self._init_mixer(self.output_device_name)
@@ -225,6 +228,25 @@ class AudioPlayer:
         except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
             print(f"[TTS] falha ao parar audio: {exc}")
 
+    def skip_current(self) -> bool:
+        # Mark the task before waiting for the mixer in case it is loading.
+        with self._current_lock:
+            task = self._current_task
+            if task is None or task.skipped:
+                return False
+            task.skipped = True
+
+        with self._mixer_lock:
+            if self._current_task is task:
+                try:
+                    pygame.mixer.music.stop()
+                except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
+                    with self._current_lock:
+                        task.skipped = False
+                    print(f"[TTS] falha ao pular audio: {exc}")
+                    return False
+        return True
+
     # ==========================
     # Loop principal
     # ==========================
@@ -307,8 +329,13 @@ class AudioPlayer:
                         deferred_normal = task
                         deferred = True
                         continue
+                    with self._current_lock:
+                        self._current_task = task
                     pygame.mixer.music.load(str(audio_file))
-                    pygame.mixer.music.play()
+                    with self._current_lock:
+                        if task.skipped:
+                            continue
+                        pygame.mixer.music.play()
 
                 while self._is_music_busy():
                     time.sleep(0.05)
@@ -320,13 +347,16 @@ class AudioPlayer:
                 if not deferred:
                     try:
                         with self._mixer_lock:
+                            with self._current_lock:
+                                self._current_task = None
                             pygame.mixer.music.unload()
                     except AUDIO_PLAYER_RECOVERABLE_ERRORS as exc:
                         print(f"[TTS] falha ao descarregar audio: {exc}")
                     self._safe_delete(audio_file)
                     source_queue.task_done()
 
-            self._sleep_between_items()
+            if not task.skipped:
+                self._sleep_between_items()
 
         if deferred_normal is not None:
             self._safe_delete(deferred_normal.path)

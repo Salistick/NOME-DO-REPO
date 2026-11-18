@@ -210,6 +210,9 @@ class TTSManager:
         elif command == "!stop":
             self._handle_stop(payload)
 
+        elif command == "!skip":
+            self._handle_skip(payload)
+
         elif command == "!resume":
             self._handle_resume(payload)
 
@@ -519,6 +522,14 @@ class TTSManager:
 
         print("[TTS]", msg)
 
+        self._reply(payload, msg)
+
+    def _handle_skip(self, payload):
+        if self.player.skip_current():
+            msg = "Fala atual pulada"
+        else:
+            msg = "Nenhuma fala em reproducao"
+        print("[TTS]", msg)
         self._reply(payload, msg)
 
     def _handle_resume(self, payload):

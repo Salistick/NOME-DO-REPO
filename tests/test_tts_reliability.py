@@ -37,6 +37,25 @@ def make_manager():
 
 
 class TTSSynthesisQueueTests(unittest.TestCase):
+    def test_skip_requires_an_admin_and_preserves_pending_synthesis(self):
+        manager = make_manager()
+        send_chat = Mock()
+        payload = {"message": "!skip", "send_chat": send_chat}
+        manager._queue_audio("pending")
+
+        manager.handle_message({**payload, "role": "viewer"})
+        manager.player.skip_current.assert_not_called()
+        send_chat.assert_not_called()
+
+        manager.player.skip_current.side_effect = [True, False]
+        manager.handle_message({**payload, "role": "moderator"})
+        send_chat.assert_called_once_with("Fala atual pulada")
+        manager.handle_message({**payload, "role": "broadcaster"})
+        self.assertEqual(send_chat.call_args.args, ("Nenhuma fala em reproducao",))
+        self.assertEqual(manager.player.skip_current.call_count, 2)
+        self.assertEqual(manager._synth_queue.qsize(), 1)
+        self.assertEqual(manager._synth_generation, 0)
+
     def test_expected_aws_errors_do_not_kill_the_worker(self):
         errors = [
             ClientError({"Error": {"Code": "AccessDeniedException"}}, "SynthesizeSpeech"),
@@ -172,12 +191,104 @@ class AudioCleanupTests(unittest.TestCase):
         player.queue = queue.Queue()
         player.priority_queue = queue.Queue()
         player._queue_lock = threading.Lock()
+        player._mixer_lock = threading.RLock()
+        player._current_lock = threading.Lock()
+        player._current_task = None
         return player
+
+    def test_skip_while_idle_preserves_pending_audio(self):
+        player = self.make_player()
+        player._running = True
+        with tempfile.TemporaryDirectory() as directory:
+            audio = Path(directory) / "pending.mp3"
+            audio.write_bytes(b"audio")
+            player.enqueue(audio)
+
+            with patch("services.tts.audio_player.pygame.mixer") as mixer:
+                self.assertFalse(player.skip_current())
+
+            mixer.music.stop.assert_not_called()
+            self.assertTrue(audio.exists())
+            self.assertEqual(player.queue.qsize(), 1)
+            self.assertEqual(player.queue.unfinished_tasks, 1)
+
+    def test_skip_active_audio_preserves_next_item_and_bypasses_interval(self):
+        for priority in (False, True):
+            with self.subTest(priority=priority), tempfile.TemporaryDirectory() as directory:
+                player = self.make_player()
+                player._running = True
+                player.paused = priority
+                source_queue = player.priority_queue if priority else player.queue
+                first = Path(directory) / "first.mp3"
+                second = Path(directory) / "second.mp3"
+                for audio in (first, second):
+                    audio.write_bytes(b"audio")
+                    self.assertTrue(player.enqueue(audio, priority=priority, bypass_state=priority))
+
+                with (
+                    patch("services.tts.audio_player.pygame.mixer") as mixer,
+                    patch("services.tts.audio_player.time.sleep") as sleep,
+                    patch.object(player, "_sleep_between_items") as interval,
+                ):
+                    def play():
+                        if mixer.music.load.call_args.args == (str(first),):
+                            mixer.music.get_busy.return_value = True
+                        else:
+                            mixer.music.get_busy.return_value = False
+                            player._running = False
+
+                    def stop():
+                        mixer.music.get_busy.return_value = False
+
+                    def skip_during_playback(_):
+                        self.assertTrue(player.skip_current())
+                        self.assertTrue(second.exists())
+                        self.assertEqual(source_queue.qsize(), 1)
+
+                    mixer.music.play.side_effect = play
+                    mixer.music.stop.side_effect = stop
+                    sleep.side_effect = skip_during_playback
+                    player._run()
+
+                mixer.music.stop.assert_called_once_with()
+                self.assertEqual(mixer.music.play.call_count, 2)
+                self.assertEqual(mixer.music.unload.call_count, 2)
+                interval.assert_called_once_with()
+                self.assertFalse(first.exists())
+                self.assertFalse(second.exists())
+                self.assertEqual(source_queue.unfinished_tasks, 0)
+                self.assertEqual(player.paused, priority)
+
+    def test_skip_during_load_prevents_that_audio_from_starting(self):
+        player = self.make_player()
+        player._running = True
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "loading.mp3"
+            second = Path(directory) / "next.mp3"
+            for audio in (first, second):
+                audio.write_bytes(b"audio")
+                player.enqueue(audio)
+
+            with patch("services.tts.audio_player.pygame.mixer") as mixer:
+                def load(path):
+                    if path == str(first):
+                        self.assertTrue(player.skip_current())
+
+                mixer.music.load.side_effect = load
+                mixer.music.get_busy.return_value = False
+                mixer.music.play.side_effect = lambda: setattr(player, "_running", False)
+                player._run()
+
+            self.assertEqual(mixer.music.load.call_count, 2)
+            mixer.music.load.assert_called_with(str(second))
+            mixer.music.play.assert_called_once_with()
+            self.assertFalse(first.exists())
+            self.assertFalse(second.exists())
+            self.assertEqual(player.queue.unfinished_tasks, 0)
 
     def test_pause_after_dequeue_preserves_audio_until_resume(self):
         player = self.make_player()
         player._running = True
-        player._mixer_lock = threading.RLock()
         with tempfile.TemporaryDirectory() as directory:
             audio = Path(directory) / "paused.mp3"
             audio.write_bytes(b"audio")
@@ -211,7 +322,6 @@ class AudioCleanupTests(unittest.TestCase):
     def test_shutdown_cleans_audio_deferred_by_pause(self):
         player = self.make_player()
         player._running = True
-        player._mixer_lock = threading.RLock()
         with tempfile.TemporaryDirectory() as directory:
             audio = Path(directory) / "paused.mp3"
             audio.write_bytes(b"audio")
@@ -235,7 +345,6 @@ class AudioCleanupTests(unittest.TestCase):
     def test_stop_resume_cannot_resurrect_audio_already_taken_from_queue(self):
         player = self.make_player()
         player._running = True
-        player._mixer_lock = threading.RLock()
         with tempfile.TemporaryDirectory() as directory:
             audio = Path(directory) / "cancelled.mp3"
             audio.write_bytes(b"audio")

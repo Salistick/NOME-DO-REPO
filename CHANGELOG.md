@@ -1,5 +1,12 @@
 # Histórico de mudanças
 
+## v1.3.0 — 2026-11-17
+
+- Donos de live e moderadores podem usar `!skip` para interromper a fala atual de `!ms` ou `!mm`, inclusive durante o carregamento do áudio.
+- O comando preserva as demais mensagens da fila e libera a próxima fala elegível sem esperar o intervalo de `!rate`.
+
+[Comparação completa com v1.2.3](https://github.com/Salistick/NOME-DO-REPO/compare/v1.2.3...v1.3.0).
+
 ## v1.2.3 — 2026-11-17
 
 - Os comandos `!ms` e `!mm` usam pausas de 10 ms na vírgula, 20 ms no ponto e vírgula e nos dois-pontos, 30 ms entre frases, 40 ms nas reticências e 60 ms entre parágrafos.

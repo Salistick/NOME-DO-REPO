@@ -2,7 +2,7 @@
 
 Aplicativo Windows que acompanha chats da Twitch, YouTube e Kick e transforma comandos em voz usando Amazon Polly. A interface permite selecionar plataformas, saída de áudio e credenciais AWS.
 
-Versão atual: **v1.2.3**. Veja o [histórico de mudanças](CHANGELOG.md) e baixe o executável ou instalador na [release v1.2.3](https://github.com/Salistick/NOME-DO-REPO/releases/tag/v1.2.3).
+Versão atual: **v1.3.0**. Veja o [histórico de mudanças](CHANGELOG.md) e baixe o executável ou instalador na [release v1.3.0](https://github.com/Salistick/NOME-DO-REPO/releases/tag/v1.3.0).
 
 ## Compatibilidade
 
@@ -51,6 +51,7 @@ Para alterar um segredo, substitua sua referência no `.env` pelo novo valor; el
 | --- | --- |
 | `!ms mensagem` | Enfileira fala pública, respeitando permissões, cooldown e limite de palavras da plataforma. |
 | `!mm mensagem` | Fala administrativa com prioridade. |
+| `!skip` | Pula a fala atual de `!ms` ou `!mm` e libera a próxima fala elegível sem esperar o intervalo entre áudios. |
 | `!pause`, `!resume`, `!stop` | Pausa, retoma ou cancela a fila. Falas administrativas podem ultrapassar a pausa. |
 | `!rate 2.5` | Define o intervalo geral entre áudios, em segundos. |
 | `!time 5` | Define o cooldown por usuário na plataforma de origem. |

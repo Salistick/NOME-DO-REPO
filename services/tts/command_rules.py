@@ -6,6 +6,7 @@ ADMIN_EXACT_COMMANDS = {
     "!time",
     "!pause",
     "!stop",
+    "!skip",
     "!resume",
     "!len",
     "!modosub",
